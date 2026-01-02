@@ -1,20 +1,44 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import ChatMessage from "./ChatMessage";
 import { FaRocket, FaMicrophone } from "react-icons/fa";
 
 export default function ChatWindow({ theme }) {
   const [messages, setMessages] = useState([
-    { text: "Hello! I'm your AI agent.", type: "agent" }
+    { text: "Hello! I'm your AI agent. Select an agent from the dropdown or chat with the default assistant.", type: "agent" }
   ]);
   const [input, setInput] = useState("");
   const [loadingReply, setLoadingReply] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [availableAgents, setAvailableAgents] = useState([]);
   const messagesEndRef = useRef(null);
 
-  async function sendUserMessage(userMessage) {
+  // Fetch available agents on component mount
+  useEffect(() => {
+    async function fetchAgents() {
+      try {
+        const res = await fetch("http://localhost:8000/agents");
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableAgents(data.agents || []);
+        }
+      } catch (err) {
+        console.error("Failed to fetch agents:", err);
+      }
+    }
+    fetchAgents();
+  }, []);
+
+  async function sendUserMessage(userMessage, agentId, conversationHistory) {
+    const payload = {
+      user_prompt: userMessage,
+      agent_id: agentId || null,
+      conversation_history: conversationHistory || null
+    };
+
     const res = await fetch("http://localhost:8000/process_message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_prompt: userMessage })
+      body: JSON.stringify(payload)
     });
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
@@ -25,18 +49,39 @@ export default function ChatWindow({ theme }) {
     if (!input.trim()) return;
 
     const userMsg = input;
-    setMessages(prev => [...prev, { text: userMsg, type: "user" }]);
+    const newMessages = [...messages, { text: userMsg, type: "user" }];
+    setMessages(newMessages);
     setInput("");
     setLoadingReply(true);
 
     try {
-      const reply = await sendUserMessage(userMsg);
+      // Pass conversation history (last 10 messages) and selected agent
+      const reply = await sendUserMessage(userMsg, selectedAgent, messages.slice(-10));
       setMessages(prev => [...prev, { text: reply, type: "agent" }]);
     } catch (err) {
       setMessages(prev => [...prev, { text: "Error contacting agent. Try again.", type: "agent" }]);
       console.error(err);
     } finally {
       setLoadingReply(false);
+    }
+  };
+
+  const handleAgentChange = (e) => {
+    const agentId = e.target.value || null;
+    setSelectedAgent(agentId);
+
+    // Add a system message when agent changes
+    if (agentId) {
+      const agent = availableAgents.find(a => a.id === agentId);
+      setMessages(prev => [...prev, {
+        text: `Switched to ${agent.name}. I'm now following this instruction: "${agent.system_instruction}"`,
+        type: "agent"
+      }]);
+    } else {
+      setMessages(prev => [...prev, {
+        text: "Switched to default assistant (no specific agent).",
+        type: "agent"
+      }]);
     }
   };
 
@@ -59,18 +104,29 @@ export default function ChatWindow({ theme }) {
       opacity: loadingReply ? 0.6 : 1
     },
     chatContainer: { flex: 1, display: "flex", flexDirection: "column", backgroundColor: theme.chatBg },
-    chatHeader: { 
-      flex: "0 0 60px",
+    chatHeader: {
+      flex: "0 0 70px",
       backgroundColor: theme.sidebarBg,
       display: "flex",
       alignItems: "center",
+      justifyContent: "space-between",
       padding: "0 20px",
       boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
       fontWeight: "bold",
       fontSize: "18px",
       color: theme.text
     },
-    messagesArea: { 
+    agentSelector: {
+      padding: "8px 12px",
+      borderRadius: "8px",
+      border: `1px solid ${theme.buttonHover}`,
+      backgroundColor: theme.chatBg,
+      color: theme.text,
+      fontSize: "14px",
+      cursor: "pointer",
+      minWidth: "200px"
+    },
+    messagesArea: {
       flex: 1,
       padding: "20px",
       overflowY: "auto",
@@ -86,7 +142,25 @@ export default function ChatWindow({ theme }) {
 
   return (
     <div style={styles.chatContainer}>
-      <div style={styles.chatHeader}>Chat with Agent</div>
+      <div style={styles.chatHeader}>
+        <span>
+          {selectedAgent
+            ? `Chatting with: ${availableAgents.find(a => a.id === selectedAgent)?.name}`
+            : "Chat with Agent"}
+        </span>
+        <select
+          style={styles.agentSelector}
+          value={selectedAgent || ""}
+          onChange={handleAgentChange}
+        >
+          <option value="">Default Assistant</option>
+          {availableAgents.map(agent => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <div
         style={styles.messagesArea}
