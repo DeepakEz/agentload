@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import os
+import re
 import urllib.request
 from pathlib import Path
 from llama_cpp import Llama
@@ -148,6 +149,33 @@ def build_context_prompt(system_instruction: str | None, conversation_history: l
 
     return "\n".join(prompt_parts)
 
+def extract_json_from_text(text: str) -> dict | None:
+    """Extract JSON object from text that may contain additional content"""
+    # Try direct JSON parsing first
+    try:
+        return json.loads(text.strip())
+    except:
+        pass
+
+    # Find JSON object using regex (match content between { and })
+    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group(0))
+        except:
+            pass
+
+    # Try to find JSON between common delimiters
+    for pattern in [r'```json\s*(\{.*?\})\s*```', r'```\s*(\{.*?\})\s*```']:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except:
+                pass
+
+    return None
+
 @app.post("/process_message")
 def process_prompt(req: UserPromptRequest):
     user_prompt = req.user_prompt.strip()
@@ -191,10 +219,12 @@ Output strictly JSON with these keys:
     # Step 2: Call your LLM with GGUF model
     llm_response = call_model(llm_instruction, max_tokens=512)  # returns JSON
 
-    try:
-        llm_data = json.loads(llm_response)
-    except Exception:
-        return {"response": "Error parsing LLM response."}
+    # Extract JSON from response (handles extra text around JSON)
+    llm_data = extract_json_from_text(llm_response)
+    if not llm_data:
+        # If JSON extraction fails, log the response for debugging
+        print(f"Failed to parse LLM response: {llm_response}")
+        return {"response": "Error parsing LLM response. The model may need adjustment."}
 
     # Step 3: If LLM confirms agent creation, save agent
     if llm_data.get("is_agent_creation"):
