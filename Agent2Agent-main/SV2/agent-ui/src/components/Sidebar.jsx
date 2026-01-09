@@ -1,5 +1,6 @@
 // Sidebar.jsx
 import React, { useState, useEffect } from "react";
+import ModelManager from "./ModelManager";
 
 const themes = {
   dark: {
@@ -150,6 +151,7 @@ const styles = {
 export default function Sidebar({ theme, toggleTheme }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
+  const [showModelManager, setShowModelManager] = useState(false);
 
   const previousChats = ["Chat with AI 1", "Chat with AI 2", "Chat with AI 3"];
 const [agents, setAgents] = useState([]);
@@ -243,7 +245,14 @@ useEffect(() => {
   </div>
 )}
 
-
+            <button
+              style={styles.bottomButton(theme)}
+              onClick={() => setShowModelManager(true)}
+              onMouseEnter={e => (e.currentTarget.style.backgroundColor = theme.bottomButtonHover)}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = theme.bottomButtonBg)}
+            >
+              🤖 Models
+            </button>
 
             <button
               style={styles.bottomButton(theme)}
@@ -264,6 +273,14 @@ useEffect(() => {
       >
         {isCollapsed ? "🔒" : "🔓"}
       </button>
+
+      {/* Model Manager Modal */}
+      {showModelManager && (
+        <ModelManager
+          theme={theme === themes.dark ? themes.dark : themes.light}
+          onClose={() => setShowModelManager(false)}
+        />
+      )}
     </div>
   );
 }

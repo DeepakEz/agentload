@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -7,6 +7,8 @@ import re
 import urllib.request
 from pathlib import Path
 from llama_cpp import Llama
+from typing import Dict
+import threading
 
 # ------------------ INIT ------------------
 app = FastAPI(title="Local GGUF Agent API")
@@ -20,15 +22,125 @@ app.add_middleware(
 )
 
 # ------------------ MODEL CONFIGURATION ------------------
-# You can change this to any GGUF model URL
-MODEL_URL = os.getenv("MODEL_URL", "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf")
 MODEL_CACHE_DIR = Path(os.getenv("MODEL_CACHE_DIR", "./models"))
 MODEL_CACHE_DIR.mkdir(exist_ok=True)
 
 AGENT_FILE = "agents.json"
+MODELS_CONFIG_FILE = "models_config.json"
 
-# Global model instance
-llm_model = None
+# Default models available
+DEFAULT_MODELS = [
+    {
+        "id": "mistral-7b-instruct-q4",
+        "name": "Mistral 7B Instruct Q4_K_M",
+        "url": "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+        "size": "4.4 GB",
+        "description": "Balanced performance and quality"
+    },
+    {
+        "id": "mistral-7b-instruct-q2",
+        "name": "Mistral 7B Instruct Q2_K",
+        "url": "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q2_K.gguf",
+        "size": "3.0 GB",
+        "description": "Smaller, faster, lower quality"
+    },
+    {
+        "id": "llama2-7b-chat-q4",
+        "name": "Llama 2 7B Chat Q4_K_M",
+        "url": "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf",
+        "size": "4.1 GB",
+        "description": "Meta's Llama 2 chat model"
+    }
+]
+
+# Model management
+class ModelManager:
+    def __init__(self):
+        self.loaded_models: Dict[str, Llama] = {}
+        self.active_model_id: str | None = None
+        self.download_progress: Dict[str, dict] = {}
+        self.lock = threading.Lock()
+
+    def get_active_model(self) -> Llama | None:
+        if self.active_model_id and self.active_model_id in self.loaded_models:
+            return self.loaded_models[self.active_model_id]
+        return None
+
+    def load_model_by_id(self, model_id: str) -> bool:
+        """Load a model by its ID"""
+        with self.lock:
+            # Check if already loaded
+            if model_id in self.loaded_models:
+                self.active_model_id = model_id
+                return True
+
+            # Find model config
+            model_info = self.get_model_info(model_id)
+            if not model_info:
+                return False
+
+            # Get model path
+            model_filename = model_info["url"].split("/")[-1]
+            model_path = MODEL_CACHE_DIR / model_filename
+
+            if not model_path.exists():
+                return False  # Model not downloaded
+
+            # Load model
+            print(f"Loading model {model_id} from {model_path}...")
+            try:
+                llm = Llama(
+                    model_path=str(model_path),
+                    n_ctx=2048,
+                    n_threads=4,
+                    n_gpu_layers=0,
+                )
+                self.loaded_models[model_id] = llm
+                self.active_model_id = model_id
+                print(f"Model {model_id} loaded successfully!")
+                return True
+            except Exception as e:
+                print(f"Failed to load model {model_id}: {e}")
+                return False
+
+    def get_model_info(self, model_id: str) -> dict | None:
+        """Get model configuration by ID"""
+        for model in DEFAULT_MODELS:
+            if model["id"] == model_id:
+                return model
+        # Check custom models
+        custom_models = self.load_custom_models()
+        for model in custom_models:
+            if model["id"] == model_id:
+                return model
+        return None
+
+    def load_custom_models(self) -> list:
+        """Load custom models from config file"""
+        if os.path.exists(MODELS_CONFIG_FILE):
+            with open(MODELS_CONFIG_FILE, "r") as f:
+                try:
+                    return json.load(f)
+                except:
+                    return []
+        return []
+
+    def save_custom_model(self, model_info: dict):
+        """Save a custom model to config"""
+        custom_models = self.load_custom_models()
+        # Check if already exists
+        for i, m in enumerate(custom_models):
+            if m["id"] == model_info["id"]:
+                custom_models[i] = model_info
+                break
+        else:
+            custom_models.append(model_info)
+
+        with open(MODELS_CONFIG_FILE, "w") as f:
+            json.dump(custom_models, f, indent=2)
+
+# Global model manager
+model_manager = ModelManager()
 
 # ------------------ REQUEST MODEL ------------------
 class Message(BaseModel):
@@ -41,54 +153,54 @@ class UserPromptRequest(BaseModel):
     conversation_history: list[Message] | None = None  # Optional: previous messages for context
 
 # ------------------ UTILS ------------------
-def download_model(url: str, destination: Path) -> Path:
-    """Download GGUF model from URL to local cache"""
-    print(f"Downloading model from {url}...")
-    print(f"This may take a while depending on model size...")
+def download_model_with_progress(model_id: str, url: str, destination: Path):
+    """Download GGUF model from URL with progress tracking"""
+    print(f"Downloading model {model_id} from {url}...")
 
     def report_progress(block_num, block_size, total_size):
         downloaded = block_num * block_size
         if total_size > 0:
             percent = min(100, (downloaded / total_size) * 100)
+            # Update progress in model_manager
+            model_manager.download_progress[model_id] = {
+                "status": "downloading",
+                "progress": percent,
+                "downloaded": downloaded,
+                "total": total_size
+            }
             print(f"\rProgress: {percent:.1f}%", end="", flush=True)
 
-    urllib.request.urlretrieve(url, destination, reporthook=report_progress)
-    print(f"\nModel downloaded successfully to {destination}")
-    return destination
-
-def load_model() -> Llama:
-    """Load GGUF model from URL or local cache"""
-    global llm_model
-
-    if llm_model is not None:
-        return llm_model
-
-    # Get model filename from URL
-    model_filename = MODEL_URL.split("/")[-1]
-    model_path = MODEL_CACHE_DIR / model_filename
-
-    # Download if not cached
-    if not model_path.exists():
-        print(f"Model not found in cache at {model_path}")
-        model_path = download_model(MODEL_URL, model_path)
-    else:
-        print(f"Using cached model at {model_path}")
-
-    # Load model with llama-cpp-python
-    print("Loading model into memory...")
-    llm_model = Llama(
-        model_path=str(model_path),
-        n_ctx=2048,  # Context window
-        n_threads=4,  # Number of CPU threads
-        n_gpu_layers=0,  # Set to >0 if you have GPU support
-    )
-    print("Model loaded successfully!")
-    return llm_model
+    try:
+        model_manager.download_progress[model_id] = {
+            "status": "downloading",
+            "progress": 0,
+            "downloaded": 0,
+            "total": 0
+        }
+        urllib.request.urlretrieve(url, destination, reporthook=report_progress)
+        model_manager.download_progress[model_id] = {
+            "status": "completed",
+            "progress": 100
+        }
+        print(f"\nModel {model_id} downloaded successfully to {destination}")
+    except Exception as e:
+        model_manager.download_progress[model_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+        print(f"\nFailed to download model {model_id}: {e}")
+        raise
 
 def call_model(prompt: str, max_tokens: int = 512) -> str:
-    """Call the GGUF model with a prompt"""
+    """Call the active GGUF model with a prompt"""
     try:
-        llm = load_model()
+        llm = model_manager.get_active_model()
+        if not llm:
+            # Try to load default model if no model is active
+            if not model_manager.load_model_by_id("mistral-7b-instruct-q4"):
+                return "[Error: No model loaded. Please download and select a model first.]"
+            llm = model_manager.get_active_model()
+
         response = llm(
             prompt,
             max_tokens=max_tokens,
@@ -245,3 +357,114 @@ def list_agents():
     agents = load_agents()
     return {"agents": [{"id": name, "name": name, "system_instruction": data.get("system_instruction")}
                        for name, data in agents.items()]}
+
+# ==================== MODEL MANAGEMENT ENDPOINTS ====================
+
+@app.get("/models")
+def list_models():
+    """List all available models (default + custom)"""
+    all_models = DEFAULT_MODELS + model_manager.load_custom_models()
+
+    # Add download status and loaded status for each model
+    for model in all_models:
+        model_filename = model["url"].split("/")[-1]
+        model_path = MODEL_CACHE_DIR / model_filename
+
+        model["downloaded"] = model_path.exists()
+        model["loaded"] = model["id"] == model_manager.active_model_id
+        model["file_size_mb"] = round(model_path.stat().st_size / (1024 * 1024), 2) if model_path.exists() else None
+
+    return {"models": all_models, "active_model_id": model_manager.active_model_id}
+
+@app.post("/models/download")
+async def download_model_endpoint(background_tasks: BackgroundTasks, model_id: str):
+    """Download a model in the background"""
+    model_info = model_manager.get_model_info(model_id)
+    if not model_info:
+        return {"success": False, "error": "Model not found"}
+
+    model_filename = model_info["url"].split("/")[-1]
+    model_path = MODEL_CACHE_DIR / model_filename
+
+    if model_path.exists():
+        return {"success": False, "error": "Model already downloaded"}
+
+    # Start download in background
+    def download_task():
+        try:
+            download_model_with_progress(model_id, model_info["url"], model_path)
+        except Exception as e:
+            print(f"Download failed: {e}")
+
+    background_tasks.add_task(download_task)
+
+    return {
+        "success": True,
+        "message": f"Downloading {model_info['name']}...",
+        "model_id": model_id
+    }
+
+@app.get("/models/download-progress/{model_id}")
+def get_download_progress(model_id: str):
+    """Get download progress for a specific model"""
+    progress = model_manager.download_progress.get(model_id, {"status": "not_started"})
+    return progress
+
+@app.post("/models/select")
+def select_model(model_id: str):
+    """Load and activate a specific model"""
+    model_info = model_manager.get_model_info(model_id)
+    if not model_info:
+        return {"success": False, "error": "Model not found"}
+
+    model_filename = model_info["url"].split("/")[-1]
+    model_path = MODEL_CACHE_DIR / model_filename
+
+    if not model_path.exists():
+        return {"success": False, "error": "Model not downloaded. Please download it first."}
+
+    success = model_manager.load_model_by_id(model_id)
+    if success:
+        return {
+            "success": True,
+            "message": f"Model {model_info['name']} loaded successfully",
+            "active_model_id": model_manager.active_model_id
+        }
+    else:
+        return {"success": False, "error": "Failed to load model"}
+
+@app.post("/models/add-custom")
+def add_custom_model(model_info: dict):
+    """Add a custom model URL"""
+    required_fields = ["id", "name", "url", "size", "description"]
+    if not all(field in model_info for field in required_fields):
+        return {"success": False, "error": f"Missing required fields: {required_fields}"}
+
+    model_manager.save_custom_model(model_info)
+    return {"success": True, "message": "Custom model added successfully"}
+
+@app.delete("/models/{model_id}")
+def delete_model(model_id: str):
+    """Delete a downloaded model file"""
+    model_info = model_manager.get_model_info(model_id)
+    if not model_info:
+        return {"success": False, "error": "Model not found"}
+
+    model_filename = model_info["url"].split("/")[-1]
+    model_path = MODEL_CACHE_DIR / model_filename
+
+    if not model_path.exists():
+        return {"success": False, "error": "Model file not found"}
+
+    # Unload if currently loaded
+    if model_id == model_manager.active_model_id:
+        if model_id in model_manager.loaded_models:
+            del model_manager.loaded_models[model_id]
+        model_manager.active_model_id = None
+
+    # Delete file
+    try:
+        model_path.unlink()
+        return {"success": True, "message": "Model deleted successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
