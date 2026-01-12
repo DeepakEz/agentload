@@ -30,6 +30,7 @@ MODEL_CACHE_DIR = Path(os.getenv("MODEL_CACHE_DIR", "./models"))
 MODEL_CACHE_DIR.mkdir(exist_ok=True)
 
 AGENT_FILE = "agents.json"
+AGENTS_PATH = Path(AGENT_FILE)
 MODELS_CONFIG_FILE = "models_config.json"
 
 # Default models available
