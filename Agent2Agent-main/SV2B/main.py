@@ -660,6 +660,37 @@ def list_agents():
     return {"agents": [{"id": name, "name": name, "system_instruction": data.get("system_instruction")}
                        for name, data in agents.items()]}
 
+# Endpoint to create a new agent
+@app.post("/agents")
+def create_agent(request: dict):
+    """Create a new agent and save to agents.json"""
+    agent_name = request.get("name", "").strip()
+    system_instruction = request.get("system_instruction", "").strip()
+
+    if not agent_name:
+        return {"success": False, "error": "Agent name is required"}
+
+    if not system_instruction:
+        return {"success": False, "error": "System instruction is required"}
+
+    # Load existing agents
+    agents = load_agents()
+
+    # Check if agent already exists
+    if agent_name in agents:
+        return {"success": False, "error": f"Agent '{agent_name}' already exists"}
+
+    # Add new agent
+    agents[agent_name] = {"system_instruction": system_instruction}
+
+    # Save to agents.json
+    try:
+        with open(AGENTS_PATH, "w") as f:
+            json.dump(agents, f, indent=2)
+        return {"success": True, "message": f"Agent '{agent_name}' created successfully"}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to save agent: {str(e)}"}
+
 # ==================== MODEL MANAGEMENT ENDPOINTS ====================
 
 @app.get("/models")
