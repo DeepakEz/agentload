@@ -152,24 +152,25 @@ export default function Sidebar({ theme, toggleTheme }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showModelManager, setShowModelManager] = useState(false);
+  const [showAgentCreator, setShowAgentCreator] = useState(false);
 
   const previousChats = ["Chat with AI 1", "Chat with AI 2", "Chat with AI 3"];
 const [agents, setAgents] = useState([]);
-useEffect(() => {
-  fetch("/agents.json")
+
+const loadAgents = () => {
+  fetch("http://localhost:8000/agents")
     .then(res => {
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       return res.json();
     })
     .then(data => {
-      // Convert object keys into array of agent objects
-      const agentsArray = Object.keys(data).map(key => ({
-        name: key,
-        system_instruction: data[key].system_instruction
-      }));
-      setAgents(agentsArray);
+      setAgents(data.agents || []);
     })
     .catch(err => console.error("Error loading agents:", err));
+};
+
+useEffect(() => {
+  loadAgents();
 }, []);
 
 
@@ -232,6 +233,14 @@ useEffect(() => {
             </button>
             {showAgents && (
   <div style={styles.agentsList}>
+    <button
+      style={{...styles.agentsItem(theme), fontWeight: "bold", textAlign: "center"}}
+      onClick={() => setShowAgentCreator(true)}
+      onMouseEnter={e => (e.currentTarget.style.backgroundColor = theme.chatItemHover)}
+      onMouseLeave={e => (e.currentTarget.style.backgroundColor = theme.chatItemBg)}
+    >
+      + Add New Agent
+    </button>
     {agents.map((agent, idx) => (
       <div
         key={idx}
@@ -239,7 +248,7 @@ useEffect(() => {
         onMouseEnter={e => (e.currentTarget.style.backgroundColor = theme.chatItemHover)}
         onMouseLeave={e => (e.currentTarget.style.backgroundColor = theme.chatItemBg)}
       >
-        {agent.name}  {/* you can show system_instruction if needed */}
+        {agent.name}
       </div>
     ))}
   </div>
@@ -281,6 +290,189 @@ useEffect(() => {
           onClose={() => setShowModelManager(false)}
         />
       )}
+
+      {/* Agent Creator Modal */}
+      {showAgentCreator && (
+        <AgentCreator
+          theme={theme === themes.dark ? themes.dark : themes.light}
+          onClose={() => {
+            setShowAgentCreator(false);
+            loadAgents(); // Reload agents after creating
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// AgentCreator Modal Component
+function AgentCreator({ theme, onClose }) {
+  const [agentName, setAgentName] = useState("");
+  const [systemInstruction, setSystemInstruction] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const handleCreate = async () => {
+    setError("");
+    setSuccess("");
+
+    if (!agentName.trim()) {
+      setError("Agent name is required");
+      return;
+    }
+
+    if (!systemInstruction.trim()) {
+      setError("System instruction is required");
+      return;
+    }
+
+    try {
+      const response = await fetch("http://localhost:8000/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: agentName,
+          system_instruction: systemInstruction
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSuccess(data.message);
+        setTimeout(() => {
+          onClose();
+        }, 1500);
+      } else {
+        setError(data.error || "Failed to create agent");
+      }
+    } catch (err) {
+      setError("Network error: " + err.message);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0,0,0,0.7)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 1000
+    }}>
+      <div style={{
+        backgroundColor: theme.sidebarBg,
+        color: theme.text,
+        padding: "30px",
+        borderRadius: "10px",
+        width: "500px",
+        maxWidth: "90%"
+      }}>
+        <h2 style={{ marginTop: 0 }}>Create New Agent</h2>
+
+        <div style={{ marginBottom: "20px" }}>
+          <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
+            Agent Name
+          </label>
+          <input
+            type="text"
+            value={agentName}
+            onChange={(e) => setAgentName(e.target.value)}
+            placeholder="e.g., CodeHelper"
+            style={{
+              width: "100%",
+              padding: "10px",
+              borderRadius: "5px",
+              border: "1px solid #444",
+              backgroundColor: theme.chatItemBg,
+              color: theme.text,
+              fontSize: "14px"
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: "20px" }}>
+          <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
+            System Instruction
+          </label>
+          <textarea
+            value={systemInstruction}
+            onChange={(e) => setSystemInstruction(e.target.value)}
+            placeholder="e.g., You are a helpful coding assistant specializing in Python..."
+            rows={6}
+            style={{
+              width: "100%",
+              padding: "10px",
+              borderRadius: "5px",
+              border: "1px solid #444",
+              backgroundColor: theme.chatItemBg,
+              color: theme.text,
+              fontSize: "14px",
+              resize: "vertical"
+            }}
+          />
+        </div>
+
+        {error && (
+          <div style={{
+            padding: "10px",
+            marginBottom: "10px",
+            backgroundColor: "#ff4444",
+            color: "white",
+            borderRadius: "5px"
+          }}>
+            {error}
+          </div>
+        )}
+
+        {success && (
+          <div style={{
+            padding: "10px",
+            marginBottom: "10px",
+            backgroundColor: "#44ff44",
+            color: "black",
+            borderRadius: "5px"
+          }}>
+            {success}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "10px" }}>
+          <button
+            onClick={handleCreate}
+            style={{
+              flex: 1,
+              padding: "12px",
+              backgroundColor: "#4CAF50",
+              color: "white",
+              border: "none",
+              borderRadius: "5px",
+              cursor: "pointer",
+              fontWeight: "bold"
+            }}
+          >
+            Create Agent
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              flex: 1,
+              padding: "12px",
+              backgroundColor: theme.buttonBg,
+              color: theme.text,
+              border: "none",
+              borderRadius: "5px",
+              cursor: "pointer"
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
