@@ -307,24 +307,49 @@ useEffect(() => {
 
 // AgentCreator Modal Component
 function AgentCreator({ theme, onClose }) {
+  const [step, setStep] = useState(1); // 1 = describe, 2 = preview
+  const [description, setDescription] = useState("");
   const [agentName, setAgentName] = useState("");
   const [systemInstruction, setSystemInstruction] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [generating, setGenerating] = useState(false);
+
+  const handleGenerate = async () => {
+    setError("");
+    setGenerating(true);
+
+    if (!description.trim()) {
+      setError("Please describe what kind of agent you want");
+      setGenerating(false);
+      return;
+    }
+
+    try {
+      const response = await fetch("http://localhost:8000/agents/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setAgentName(data.agent_name);
+        setSystemInstruction(data.system_instruction);
+        setStep(2); // Move to preview step
+      } else {
+        setError(data.error || "Failed to generate agent");
+      }
+    } catch (err) {
+      setError("Network error: " + err.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleCreate = async () => {
     setError("");
-    setSuccess("");
-
-    if (!agentName.trim()) {
-      setError("Agent name is required");
-      return;
-    }
-
-    if (!systemInstruction.trim()) {
-      setError("System instruction is required");
-      return;
-    }
 
     try {
       const response = await fetch("http://localhost:8000/agents", {
@@ -372,106 +397,197 @@ function AgentCreator({ theme, onClose }) {
         width: "500px",
         maxWidth: "90%"
       }}>
-        <h2 style={{ marginTop: 0 }}>Create New Agent</h2>
+        <h2 style={{ marginTop: 0 }}>
+          {step === 1 ? "Create New Agent" : "Review & Edit Agent"}
+        </h2>
 
-        <div style={{ marginBottom: "20px" }}>
-          <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
-            Agent Name
-          </label>
-          <input
-            type="text"
-            value={agentName}
-            onChange={(e) => setAgentName(e.target.value)}
-            placeholder="e.g., CodeHelper"
-            style={{
-              width: "100%",
-              padding: "10px",
-              borderRadius: "5px",
-              border: "1px solid #444",
-              backgroundColor: theme.chatItemBg,
-              color: theme.text,
-              fontSize: "14px"
-            }}
-          />
-        </div>
+        {step === 1 ? (
+          // Step 1: Describe what you want
+          <>
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
+                What kind of agent do you want?
+              </label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Example: I want an agent that helps me write Python code and debug errors"
+                rows={4}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  borderRadius: "5px",
+                  border: "1px solid #444",
+                  backgroundColor: theme.chatItemBg,
+                  color: theme.text,
+                  fontSize: "14px",
+                  resize: "vertical"
+                }}
+              />
+            </div>
 
-        <div style={{ marginBottom: "20px" }}>
-          <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
-            System Instruction
-          </label>
-          <textarea
-            value={systemInstruction}
-            onChange={(e) => setSystemInstruction(e.target.value)}
-            placeholder="e.g., You are a helpful coding assistant specializing in Python..."
-            rows={6}
-            style={{
-              width: "100%",
-              padding: "10px",
-              borderRadius: "5px",
-              border: "1px solid #444",
-              backgroundColor: theme.chatItemBg,
-              color: theme.text,
-              fontSize: "14px",
-              resize: "vertical"
-            }}
-          />
-        </div>
+            {error && (
+              <div style={{
+                padding: "10px",
+                marginBottom: "10px",
+                backgroundColor: "#ff4444",
+                color: "white",
+                borderRadius: "5px"
+              }}>
+                {error}
+              </div>
+            )}
 
-        {error && (
-          <div style={{
-            padding: "10px",
-            marginBottom: "10px",
-            backgroundColor: "#ff4444",
-            color: "white",
-            borderRadius: "5px"
-          }}>
-            {error}
-          </div>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: generating ? "#666" : "#4CAF50",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: generating ? "not-allowed" : "pointer",
+                  fontWeight: "bold"
+                }}
+              >
+                {generating ? "Generating..." : "✨ Generate Agent"}
+              </button>
+              <button
+                onClick={onClose}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: theme.buttonBg,
+                  color: theme.text,
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: "pointer"
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          // Step 2: Preview and edit
+          <>
+            <div style={{ marginBottom: "15px", padding: "10px", backgroundColor: theme.chatItemBg, borderRadius: "5px" }}>
+              <small style={{ color: "#888" }}>You can edit the generated details below before creating</small>
+            </div>
+
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
+                Agent Name
+              </label>
+              <input
+                type="text"
+                value={agentName}
+                onChange={(e) => setAgentName(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  borderRadius: "5px",
+                  border: "1px solid #444",
+                  backgroundColor: theme.chatItemBg,
+                  color: theme.text,
+                  fontSize: "14px"
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
+                System Instruction
+              </label>
+              <textarea
+                value={systemInstruction}
+                onChange={(e) => setSystemInstruction(e.target.value)}
+                rows={6}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  borderRadius: "5px",
+                  border: "1px solid #444",
+                  backgroundColor: theme.chatItemBg,
+                  color: theme.text,
+                  fontSize: "14px",
+                  resize: "vertical"
+                }}
+              />
+            </div>
+
+            {error && (
+              <div style={{
+                padding: "10px",
+                marginBottom: "10px",
+                backgroundColor: "#ff4444",
+                color: "white",
+                borderRadius: "5px"
+              }}>
+                {error}
+              </div>
+            )}
+
+            {success && (
+              <div style={{
+                padding: "10px",
+                marginBottom: "10px",
+                backgroundColor: "#44ff44",
+                color: "black",
+                borderRadius: "5px"
+              }}>
+                {success}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                onClick={() => setStep(1)}
+                style={{
+                  padding: "12px 20px",
+                  backgroundColor: theme.buttonBg,
+                  color: theme.text,
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: "pointer"
+                }}
+              >
+                ← Back
+              </button>
+              <button
+                onClick={handleCreate}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  backgroundColor: "#4CAF50",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: "pointer",
+                  fontWeight: "bold"
+                }}
+              >
+                Create Agent
+              </button>
+              <button
+                onClick={onClose}
+                style={{
+                  padding: "12px 20px",
+                  backgroundColor: theme.buttonBg,
+                  color: theme.text,
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: "pointer"
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </>
         )}
-
-        {success && (
-          <div style={{
-            padding: "10px",
-            marginBottom: "10px",
-            backgroundColor: "#44ff44",
-            color: "black",
-            borderRadius: "5px"
-          }}>
-            {success}
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: "10px" }}>
-          <button
-            onClick={handleCreate}
-            style={{
-              flex: 1,
-              padding: "12px",
-              backgroundColor: "#4CAF50",
-              color: "white",
-              border: "none",
-              borderRadius: "5px",
-              cursor: "pointer",
-              fontWeight: "bold"
-            }}
-          >
-            Create Agent
-          </button>
-          <button
-            onClick={onClose}
-            style={{
-              flex: 1,
-              padding: "12px",
-              backgroundColor: theme.buttonBg,
-              color: theme.text,
-              border: "none",
-              borderRadius: "5px",
-              cursor: "pointer"
-            }}
-          >
-            Cancel
-          </button>
-        </div>
       </div>
     </div>
   );
