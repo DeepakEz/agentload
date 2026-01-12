@@ -8,7 +8,10 @@ export default function ChatWindow({ theme }) {
   ]);
   const [input, setInput] = useState("");
   const [loadingReply, setLoadingReply] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [selectedAgent, setSelectedAgent] = useState(() => {
+    // Load selected agent from localStorage
+    return localStorage.getItem("selectedAgent") || null;
+  });
   const [availableAgents, setAvailableAgents] = useState([]);
   const [agentWisdom, setAgentWisdom] = useState(null);
   const [tokensUsed, setTokensUsed] = useState(0);
@@ -29,6 +32,40 @@ export default function ChatWindow({ theme }) {
     }
     fetchAgents();
   }, []);
+
+  // Load conversation history when agent is selected
+  useEffect(() => {
+    if (!selectedAgent) return;
+
+    async function loadConversationHistory() {
+      try {
+        const res = await fetch(`http://localhost:8000/agents/${selectedAgent}/conversations?limit=50`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.conversations && data.conversations.length > 0) {
+            // Convert database conversations to message format
+            const loadedMessages = [];
+            data.conversations.reverse().forEach(conv => {
+              loadedMessages.push({ text: conv.user_message, type: "user" });
+              loadedMessages.push({ text: conv.agent_response, type: "agent" });
+            });
+            setMessages(loadedMessages);
+          } else {
+            // No previous conversations, show welcome message
+            setMessages([
+              { text: `Hello! I'm ${selectedAgent}. How can I help you today?`, type: "agent" }
+            ]);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load conversation history:", err);
+      }
+    }
+
+    loadConversationHistory();
+    // Save selected agent to localStorage
+    localStorage.setItem("selectedAgent", selectedAgent);
+  }, [selectedAgent]);
 
   // Poll for insights when agent is selected
   useEffect(() => {

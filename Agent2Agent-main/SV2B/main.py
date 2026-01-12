@@ -628,6 +628,10 @@ def generate_agent(request: dict):
     if not user_description:
         return {"success": False, "error": "Description is required"}
 
+    # Check if model is loaded
+    if not model_manager.get_active_model():
+        return {"success": False, "error": "No model loaded. Please download and select a model from the 🤖 Models menu first."}
+
     # Ask LLM to generate agent details
     llm_instruction = f"""You are an AI assistant that helps create other AI agents.
 
@@ -638,28 +642,33 @@ Your task:
 2. Write a clear system instruction that defines the agent's role, expertise, and behavior
 3. The system instruction should be actionable and guide the agent's responses
 
-Output ONLY valid JSON with these exact keys:
+Output ONLY valid JSON with these exact keys (no extra text):
 {{
   "agent_name": "ExampleName",
   "system_instruction": "You are a [role] that helps users with [task]. You should [behavior guidelines]."
 }}
 
-Be creative but professional. The agent name should reflect its purpose."""
+Be creative but professional. The agent name should reflect its purpose.
+Return ONLY the JSON, nothing else."""
 
     try:
         llm_response = call_model(llm_instruction, max_tokens=512)
+
+        # Log the response for debugging
+        print(f"LLM Response for agent generation: {llm_response}")
 
         # Extract JSON from response
         agent_data = extract_json_from_text(llm_response)
 
         if not agent_data:
-            return {"success": False, "error": "Failed to generate agent details. Please try again."}
+            print(f"Failed to extract JSON from: {llm_response}")
+            return {"success": False, "error": "Failed to parse LLM response. The model may not have returned valid JSON. Try again."}
 
-        agent_name = agent_data.get("agent_name", "CustomAgent")
+        agent_name = agent_data.get("agent_name", "")
         system_instruction = agent_data.get("system_instruction", "")
 
-        if not system_instruction:
-            return {"success": False, "error": "Generated invalid system instruction"}
+        if not agent_name or not system_instruction:
+            return {"success": False, "error": "Generated incomplete agent details. Try again with a more specific description."}
 
         return {
             "success": True,
@@ -668,6 +677,7 @@ Be creative but professional. The agent name should reflect its purpose."""
         }
 
     except Exception as e:
+        print(f"Agent generation error: {e}")
         return {"success": False, "error": f"Generation failed: {str(e)}"}
 
 # Endpoint to create a new agent
