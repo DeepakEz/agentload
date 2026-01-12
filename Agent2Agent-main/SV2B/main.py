@@ -619,6 +619,57 @@ def list_agents():
     return {"agents": [{"id": name, "name": name, "system_instruction": data.get("system_instruction")}
                        for name, data in agents.items()]}
 
+# Endpoint to generate agent details from description
+@app.post("/agents/generate")
+def generate_agent(request: dict):
+    """Generate agent name and system instruction from user description"""
+    user_description = request.get("description", "").strip()
+
+    if not user_description:
+        return {"success": False, "error": "Description is required"}
+
+    # Ask LLM to generate agent details
+    llm_instruction = f"""You are an AI assistant that helps create other AI agents.
+
+User wants: "{user_description}"
+
+Your task:
+1. Create a concise, memorable agent name (2-3 words, CamelCase, no spaces)
+2. Write a clear system instruction that defines the agent's role, expertise, and behavior
+3. The system instruction should be actionable and guide the agent's responses
+
+Output ONLY valid JSON with these exact keys:
+{{
+  "agent_name": "ExampleName",
+  "system_instruction": "You are a [role] that helps users with [task]. You should [behavior guidelines]."
+}}
+
+Be creative but professional. The agent name should reflect its purpose."""
+
+    try:
+        llm_response = call_model(llm_instruction, max_tokens=512)
+
+        # Extract JSON from response
+        agent_data = extract_json_from_text(llm_response)
+
+        if not agent_data:
+            return {"success": False, "error": "Failed to generate agent details. Please try again."}
+
+        agent_name = agent_data.get("agent_name", "CustomAgent")
+        system_instruction = agent_data.get("system_instruction", "")
+
+        if not system_instruction:
+            return {"success": False, "error": "Generated invalid system instruction"}
+
+        return {
+            "success": True,
+            "agent_name": agent_name,
+            "system_instruction": system_instruction
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"Generation failed: {str(e)}"}
+
 # Endpoint to create a new agent
 @app.post("/agents")
 def create_agent(request: dict):
