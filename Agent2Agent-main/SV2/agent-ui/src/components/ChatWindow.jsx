@@ -287,7 +287,7 @@ export default function ChatWindow({ theme }) {
       </div>
 
       {/* Scrollbar CSS for Webkit browsers */}
-      <style jsx>{`
+      <style>{`
         .messages-area::-webkit-scrollbar {
           width: 8px;
         }
