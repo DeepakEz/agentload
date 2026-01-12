@@ -321,7 +321,7 @@ class AgentWisdom:
         return "\n".join(summary_parts)
 
 class BackgroundLearner:
-    """Continuous learning in background"""
+    """AI-powered continuous learning in background"""
     def __init__(self):
         self.db = ConversationDatabase()
         self.running = False
@@ -334,7 +334,7 @@ class BackgroundLearner:
             self.running = True
             self.thread = threading.Thread(target=self._learning_loop, daemon=True)
             self.thread.start()
-            print("Background learning system started")
+            print("🧠 AI-powered background learning system started")
 
     def stop(self):
         """Stop background learning"""
@@ -352,50 +352,104 @@ class BackgroundLearner:
             time.sleep(self.learning_interval)
 
     def _analyze_all_agents(self):
-        """Analyze conversations for all agents"""
+        """Analyze conversations for all agents using AI"""
         agents = load_agents()
         for agent_id in agents.keys():
-            self._analyze_agent(agent_id)
+            try:
+                self._analyze_agent(agent_id)
+            except Exception as e:
+                print(f"Error analyzing agent {agent_id}: {e}")
 
     def _analyze_agent(self, agent_id: str):
-        """Analyze conversations and learn patterns for an agent"""
+        """AI-powered analysis of agent conversations"""
         conversations = self.db.get_agent_conversations(agent_id, limit=20)
         if len(conversations) < 3:
             return  # Not enough data
 
         wisdom = AgentWisdom(agent_id)
 
-        # Extract topics discussed
-        topics = self._extract_topics(conversations)
+        # Use LLM to extract topics (more intelligent than keyword matching)
+        topics = self._extract_topics_with_ai(conversations)
         if topics:
             wisdom.wisdom["expertise_areas"] = list(set(wisdom.wisdom["expertise_areas"] + topics))
             wisdom.save_wisdom()
 
-        # Generate insight if pattern detected
-        if len(conversations) >= 10 and len(conversations) % 10 == 0:
-            insight = self._generate_insight(agent_id, conversations)
+        # Generate intelligent insights using LLM
+        # More frequent insights (every 5 conversations instead of 10)
+        if len(conversations) >= 5:
+            insight = self._generate_intelligent_insight(agent_id, conversations, wisdom)
             if insight:
                 self.db.store_insight(agent_id, insight)
                 wisdom.add_insight(insight)
-                print(f"Agent {agent_id} generated insight: {insight[:100]}...")
+                print(f"💡 Agent {agent_id} discovered: {insight[:100]}...")
 
-    def _extract_topics(self, conversations: List) -> List[str]:
-        """Simple topic extraction from conversations"""
-        topics = []
-        for user_msg, agent_resp, _, _ in conversations[:5]:
-            # Simple keyword extraction (can be enhanced with NLP)
-            combined = (user_msg + " " + agent_resp).lower()
-            keywords = ["python", "javascript", "data", "math", "code", "science", "history", "art"]
-            for keyword in keywords:
-                if keyword in combined and keyword not in topics:
-                    topics.append(keyword)
-        return topics[:5]
+    def _extract_topics_with_ai(self, conversations: List) -> List[str]:
+        """Use LLM to intelligently extract topics from conversations"""
+        if not model_manager.get_active_model():
+            return []  # No model loaded
 
-    def _generate_insight(self, agent_id: str, conversations: List) -> str | None:
-        """Generate a proactive insight from patterns"""
-        # This is a simple version - can be enhanced with actual LLM analysis
-        if len(conversations) >= 10:
-            return f"I've been reflecting on our {len(conversations)} conversations, and I think I can help you even better now!"
+        # Take recent conversations
+        recent_convos = conversations[:5]
+        convo_text = "\n".join([f"User: {c[0]}\nAgent: {c[1]}" for c in recent_convos])
+
+        prompt = f"""Analyze these conversations and identify the main topics discussed.
+List 3-5 specific topics or themes (single words or short phrases).
+
+Conversations:
+{convo_text[:1000]}
+
+Output ONLY a JSON array of topics:
+["topic1", "topic2", "topic3"]"""
+
+        try:
+            response = call_model(prompt, max_tokens=100)
+            topics_data = extract_json_from_text(response)
+            if isinstance(topics_data, list):
+                return topics_data[:5]
+        except Exception as e:
+            print(f"Topic extraction error: {e}")
+
+        return []
+
+    def _generate_intelligent_insight(self, agent_id: str, conversations: List, wisdom: AgentWisdom) -> str | None:
+        """Use LLM to generate creative insights from conversation patterns"""
+        if not model_manager.get_active_model():
+            return None
+
+        # Build context from recent conversations
+        recent_convos = conversations[:10]
+        convo_summary = "\n".join([f"User: {c[0][:200]}\nAgent: {c[1][:200]}" for c in recent_convos])
+
+        expertise = ", ".join(wisdom.wisdom["expertise_areas"][-5:]) if wisdom.wisdom["expertise_areas"] else "various topics"
+        convo_count = wisdom.wisdom["conversation_count"]
+
+        prompt = f"""You are an AI agent reflecting on your conversations with a user.
+
+Your expertise areas: {expertise}
+Total conversations: {convo_count}
+
+Recent conversations:
+{convo_summary[:1500]}
+
+Based on these conversations, generate ONE creative, insightful observation. This could be:
+- A pattern you noticed in the user's questions or interests
+- A connection between different topics you discussed
+- A novel suggestion or idea based on what you've learned
+- An interesting insight about their goals or challenges
+
+Be specific, creative, and genuinely helpful. Make it feel like you've been thinking deeply.
+
+Output ONLY the insight text (no JSON, just the message):"""
+
+        try:
+            insight = call_model(prompt, max_tokens=200)
+            # Clean up the response
+            insight = insight.strip()
+            if len(insight) > 20 and len(insight) < 500:
+                return insight
+        except Exception as e:
+            print(f"Insight generation error: {e}")
+
         return None
 
 # Initialize systems
