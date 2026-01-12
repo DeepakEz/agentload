@@ -12,17 +12,45 @@ export default function ChatMessage({ text, type, theme }) {
 
   const userStyle = {
     ...baseStyle,
-    backgroundColor: theme.chatItemBg,   // user message background
-    color: theme.text,                 // user message text
+    backgroundColor: theme.chatItemBg,
+    color: theme.text,
     alignSelf: "flex-end"
   };
 
   const agentStyle = {
     ...baseStyle,
-    backgroundColor: theme.chatItemBg, // agent message background
-    color: theme.text,                 // agent message text
+    backgroundColor: theme.chatItemBg,
+    color: theme.text,
     alignSelf: "flex-start"
   };
 
-  return <div style={type === "user" ? userStyle : agentStyle}>{text}</div>;
+  const insightStyle = {
+    ...baseStyle,
+    backgroundColor: "#1a472a",  // Dark green for insights
+    color: "#90EE90",  // Light green text
+    alignSelf: "center",
+    border: "2px solid #2e7d32",
+    fontStyle: "italic",
+    maxWidth: "95%",
+    textAlign: "center",
+    animation: "fadeIn 0.5s"
+  };
+
+  const getStyle = () => {
+    if (type === "user") return userStyle;
+    if (type === "insight") return insightStyle;
+    return agentStyle;
+  };
+
+  return (
+    <>
+      <div style={getStyle()}>{text}</div>
+      <style jsx>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+    </>
+  );
 }

@@ -10,6 +10,8 @@ export default function ChatWindow({ theme }) {
   const [loadingReply, setLoadingReply] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [availableAgents, setAvailableAgents] = useState([]);
+  const [agentWisdom, setAgentWisdom] = useState(null);
+  const [tokensUsed, setTokensUsed] = useState(0);
   const messagesEndRef = useRef(null);
 
   // Fetch available agents on component mount
@@ -28,6 +30,48 @@ export default function ChatWindow({ theme }) {
     fetchAgents();
   }, []);
 
+  // Poll for insights when agent is selected
+  useEffect(() => {
+    if (!selectedAgent) return;
+
+    async function checkInsights() {
+      try {
+        const res = await fetch(`http://localhost:8000/agents/${selectedAgent}/insights`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.insights && data.insights.length > 0) {
+            // Add insights as agent-initiated messages
+            for (const insight of data.insights) {
+              setMessages(prev => [...prev, {
+                text: `💡 ${insight.text}`,
+                type: "insight",
+                insightId: insight.id
+              }]);
+
+              // Mark as delivered
+              await fetch(`http://localhost:8000/agents/${selectedAgent}/insights/${insight.id}/delivered`, {
+                method: "POST"
+              });
+            }
+          }
+        }
+
+        // Fetch agent wisdom
+        const wisdomRes = await fetch(`http://localhost:8000/agents/${selectedAgent}/wisdom`);
+        if (wisdomRes.ok) {
+          const wisdomData = await wisdomRes.json();
+          setAgentWisdom(wisdomData);
+        }
+      } catch (err) {
+        console.error("Failed to check insights:", err);
+      }
+    }
+
+    checkInsights();
+    const interval = setInterval(checkInsights, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, [selectedAgent]);
+
   async function sendUserMessage(userMessage, agentId, conversationHistory) {
     const payload = {
       user_prompt: userMessage,
@@ -42,7 +86,13 @@ export default function ChatWindow({ theme }) {
     });
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
-    return data.response;
+
+    // Update tokens used
+    if (data.tokens_used) {
+      setTokensUsed(data.tokens_used);
+    }
+
+    return data;
   }
 
   const handleSend = async () => {
@@ -56,8 +106,19 @@ export default function ChatWindow({ theme }) {
 
     try {
       // Pass conversation history (last 10 messages) and selected agent
-      const reply = await sendUserMessage(userMsg, selectedAgent, messages.slice(-10));
-      setMessages(prev => [...prev, { text: reply, type: "agent" }]);
+      const data = await sendUserMessage(userMsg, selectedAgent, messages.slice(-10));
+      setMessages(prev => [...prev, { text: data.response, type: "agent" }]);
+
+      // Show pending insights if any
+      if (data.pending_insights && data.pending_insights.length > 0) {
+        for (const insight of data.pending_insights) {
+          setMessages(prev => [...prev, {
+            text: `💡 ${insight.text}`,
+            type: "insight",
+            insightId: insight.id
+          }]);
+        }
+      }
     } catch (err) {
       setMessages(prev => [...prev, { text: "Error contacting agent. Try again.", type: "agent" }]);
       console.error(err);
@@ -126,6 +187,24 @@ export default function ChatWindow({ theme }) {
       cursor: "pointer",
       minWidth: "200px"
     },
+    wisdomBadge: {
+      fontSize: "11px",
+      padding: "4px 8px",
+      borderRadius: "12px",
+      backgroundColor: theme.buttonBg,
+      marginLeft: "10px",
+      display: "inline-block"
+    },
+    tokenCounter: {
+      fontSize: "11px",
+      opacity: 0.7,
+      marginTop: "2px"
+    },
+    headerInfo: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-start"
+    },
     messagesArea: {
       flex: 1,
       padding: "20px",
@@ -143,11 +222,28 @@ export default function ChatWindow({ theme }) {
   return (
     <div style={styles.chatContainer}>
       <div style={styles.chatHeader}>
-        <span>
-          {selectedAgent
-            ? `Chatting with: ${availableAgents.find(a => a.id === selectedAgent)?.name}`
-            : "Chat with Agent"}
-        </span>
+        <div style={styles.headerInfo}>
+          <div>
+            <span>
+              {selectedAgent
+                ? `Chatting with: ${availableAgents.find(a => a.id === selectedAgent)?.name}`
+                : "Chat with Agent"}
+            </span>
+            {agentWisdom && (
+              <span style={styles.wisdomBadge}>
+                📚 {agentWisdom.conversation_count} convos
+                {agentWisdom.expertise_areas && agentWisdom.expertise_areas.length > 0 &&
+                  ` | ${agentWisdom.expertise_areas.slice(0, 3).join(", ")}`
+                }
+              </span>
+            )}
+          </div>
+          {tokensUsed > 0 && (
+            <div style={styles.tokenCounter}>
+              Context: {tokensUsed} / 2048 tokens {tokensUsed > 1800 && "⚠️ Near limit"}
+            </div>
+          )}
+        </div>
         <select
           style={styles.agentSelector}
           value={selectedAgent || ""}

@@ -7,8 +7,12 @@ import re
 import urllib.request
 from pathlib import Path
 from llama_cpp import Llama
-from typing import Dict
+from typing import Dict, List
 import threading
+import sqlite3
+from datetime import datetime
+import time
+import hashlib
 
 # ------------------ INIT ------------------
 app = FastAPI(title="Local GGUF Agent API")
@@ -142,6 +146,270 @@ class ModelManager:
 # Global model manager
 model_manager = ModelManager()
 
+# ------------------ AGENT LEARNING SYSTEM ------------------
+CONVERSATIONS_DB = "agent_conversations.db"
+AGENT_WISDOM_DIR = Path("agent_wisdom")
+AGENT_WISDOM_DIR.mkdir(exist_ok=True)
+
+class ConversationDatabase:
+    """Manages conversation storage and retrieval"""
+    def __init__(self, db_path: str = CONVERSATIONS_DB):
+        self.db_path = db_path
+        self.init_database()
+
+    def init_database(self):
+        """Initialize database schema"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Conversations table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                user_message TEXT NOT NULL,
+                agent_response TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                tokens_used INTEGER DEFAULT 0
+            )
+        ''')
+
+        # Agent insights table (proactive messages)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS agent_insights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                insight TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                delivered BOOLEAN DEFAULT FALSE
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+
+    def store_conversation(self, agent_id: str, user_msg: str, agent_resp: str, session_id: str, tokens: int = 0):
+        """Store a conversation exchange"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO conversations (agent_id, user_message, agent_response, timestamp, session_id, tokens_used)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (agent_id, user_msg, agent_resp, datetime.now().isoformat(), session_id, tokens))
+        conn.commit()
+        conn.close()
+
+    def get_agent_conversations(self, agent_id: str, limit: int = 100):
+        """Get recent conversations for an agent"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT user_message, agent_response, timestamp, tokens_used
+            FROM conversations
+            WHERE agent_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        ''', (agent_id, limit))
+        results = cursor.fetchall()
+        conn.close()
+        return results
+
+    def store_insight(self, agent_id: str, insight: str):
+        """Store a proactive insight"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO agent_insights (agent_id, insight, timestamp)
+            VALUES (?, ?, ?)
+        ''', (agent_id, insight, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+
+    def get_pending_insights(self, agent_id: str):
+        """Get undelivered insights"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, insight, timestamp
+            FROM agent_insights
+            WHERE agent_id = ? AND delivered = FALSE
+            ORDER BY timestamp ASC
+        ''', (agent_id,))
+        results = cursor.fetchall()
+        conn.close()
+        return results
+
+    def mark_insight_delivered(self, insight_id: int):
+        """Mark insight as delivered"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('UPDATE agent_insights SET delivered = TRUE WHERE id = ?', (insight_id,))
+        conn.commit()
+        conn.close()
+
+class AgentWisdom:
+    """Manages agent learning and wisdom accumulation"""
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+        self.wisdom_file = AGENT_WISDOM_DIR / f"{agent_id}_wisdom.json"
+        self.wisdom = self.load_wisdom()
+
+    def load_wisdom(self) -> dict:
+        """Load accumulated wisdom"""
+        if self.wisdom_file.exists():
+            with open(self.wisdom_file, 'r') as f:
+                return json.load(f)
+        return {
+            "patterns": [],  # Learned patterns from conversations
+            "preferences": {},  # User preferences
+            "insights": [],  # Generated insights
+            "conversation_count": 0,
+            "last_learning_timestamp": None,
+            "expertise_areas": []  # Topics agent has discussed
+        }
+
+    def save_wisdom(self):
+        """Save wisdom to file"""
+        with open(self.wisdom_file, 'w') as f:
+            json.dump(self.wisdom, f, indent=2)
+
+    def add_pattern(self, pattern: dict):
+        """Add a learned pattern"""
+        self.wisdom["patterns"].append({
+            **pattern,
+            "timestamp": datetime.now().isoformat()
+        })
+        # Keep only last 50 patterns
+        self.wisdom["patterns"] = self.wisdom["patterns"][-50:]
+        self.save_wisdom()
+
+    def add_insight(self, insight: str):
+        """Add a generated insight"""
+        self.wisdom["insights"].append({
+            "text": insight,
+            "timestamp": datetime.now().isoformat()
+        })
+        self.wisdom["insights"] = self.wisdom["insights"][-20:]
+        self.save_wisdom()
+
+    def increment_conversation_count(self):
+        """Increment conversation counter"""
+        self.wisdom["conversation_count"] += 1
+        self.save_wisdom()
+
+    def get_wisdom_summary(self) -> str:
+        """Generate a summary of accumulated wisdom"""
+        if not self.wisdom["patterns"]:
+            return ""
+
+        summary_parts = ["Based on our past conversations, I've learned:"]
+
+        # Recent patterns
+        if self.wisdom["patterns"]:
+            recent_patterns = self.wisdom["patterns"][-5:]
+            for p in recent_patterns:
+                if "description" in p:
+                    summary_parts.append(f"- {p['description']}")
+
+        # Expertise areas
+        if self.wisdom["expertise_areas"]:
+            areas = ", ".join(self.wisdom["expertise_areas"][-5:])
+            summary_parts.append(f"\nAreas we've discussed: {areas}")
+
+        return "\n".join(summary_parts)
+
+class BackgroundLearner:
+    """Continuous learning in background"""
+    def __init__(self):
+        self.db = ConversationDatabase()
+        self.running = False
+        self.thread = None
+        self.learning_interval = 300  # Learn every 5 minutes
+
+    def start(self):
+        """Start background learning"""
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._learning_loop, daemon=True)
+            self.thread.start()
+            print("Background learning system started")
+
+    def stop(self):
+        """Stop background learning"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=5)
+
+    def _learning_loop(self):
+        """Main learning loop"""
+        while self.running:
+            try:
+                self._analyze_all_agents()
+            except Exception as e:
+                print(f"Background learning error: {e}")
+            time.sleep(self.learning_interval)
+
+    def _analyze_all_agents(self):
+        """Analyze conversations for all agents"""
+        agents = load_agents()
+        for agent_id in agents.keys():
+            self._analyze_agent(agent_id)
+
+    def _analyze_agent(self, agent_id: str):
+        """Analyze conversations and learn patterns for an agent"""
+        conversations = self.db.get_agent_conversations(agent_id, limit=20)
+        if len(conversations) < 3:
+            return  # Not enough data
+
+        wisdom = AgentWisdom(agent_id)
+
+        # Extract topics discussed
+        topics = self._extract_topics(conversations)
+        if topics:
+            wisdom.wisdom["expertise_areas"] = list(set(wisdom.wisdom["expertise_areas"] + topics))
+            wisdom.save_wisdom()
+
+        # Generate insight if pattern detected
+        if len(conversations) >= 10 and len(conversations) % 10 == 0:
+            insight = self._generate_insight(agent_id, conversations)
+            if insight:
+                self.db.store_insight(agent_id, insight)
+                wisdom.add_insight(insight)
+                print(f"Agent {agent_id} generated insight: {insight[:100]}...")
+
+    def _extract_topics(self, conversations: List) -> List[str]:
+        """Simple topic extraction from conversations"""
+        topics = []
+        for user_msg, agent_resp, _, _ in conversations[:5]:
+            # Simple keyword extraction (can be enhanced with NLP)
+            combined = (user_msg + " " + agent_resp).lower()
+            keywords = ["python", "javascript", "data", "math", "code", "science", "history", "art"]
+            for keyword in keywords:
+                if keyword in combined and keyword not in topics:
+                    topics.append(keyword)
+        return topics[:5]
+
+    def _generate_insight(self, agent_id: str, conversations: List) -> str | None:
+        """Generate a proactive insight from patterns"""
+        # This is a simple version - can be enhanced with actual LLM analysis
+        if len(conversations) >= 10:
+            return f"I've been reflecting on our {len(conversations)} conversations, and I think I can help you even better now!"
+        return None
+
+# Initialize systems
+conversation_db = ConversationDatabase()
+background_learner = BackgroundLearner()
+
+# Start background learning on startup
+@app.on_event("startup")
+async def startup_event():
+    background_learner.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    background_learner.stop()
+
 # ------------------ REQUEST MODEL ------------------
 class Message(BaseModel):
     text: str
@@ -239,13 +507,20 @@ def save_agent(agent_name: str, system_instruction: str):
     with open(AGENT_FILE, "w") as f:
         json.dump(agents, f, indent=2)
 
-def build_context_prompt(system_instruction: str | None, conversation_history: list[Message] | None, user_prompt: str) -> str:
-    """Build a prompt with system instruction and conversation history"""
+def build_context_prompt(system_instruction: str | None, conversation_history: list[Message] | None, user_prompt: str, agent_id: str | None = None) -> str:
+    """Build a prompt with system instruction, wisdom, and conversation history"""
     prompt_parts = []
 
     # Add system instruction if provided
     if system_instruction:
         prompt_parts.append(f"System: {system_instruction}\n")
+
+    # Add agent wisdom if available
+    if agent_id:
+        wisdom = AgentWisdom(agent_id)
+        wisdom_summary = wisdom.get_wisdom_summary()
+        if wisdom_summary:
+            prompt_parts.append(f"My accumulated knowledge:\n{wisdom_summary}\n")
 
     # Add conversation history (last 10 messages for context)
     if conversation_history:
@@ -260,6 +535,10 @@ def build_context_prompt(system_instruction: str | None, conversation_history: l
     prompt_parts.append("Assistant:")
 
     return "\n".join(prompt_parts)
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimation (1 token ≈ 4 characters)"""
+    return len(text) // 4
 
 def extract_json_from_text(text: str) -> dict | None:
     """Extract JSON object from text that may contain additional content"""
@@ -291,6 +570,7 @@ def extract_json_from_text(text: str) -> dict | None:
 @app.post("/process_message")
 def process_prompt(req: UserPromptRequest):
     user_prompt = req.user_prompt.strip()
+    session_id = hashlib.md5(datetime.now().isoformat().encode()).hexdigest()[:8]
 
     # If agent_id is provided, use that agent's system instruction
     if req.agent_id:
@@ -298,10 +578,32 @@ def process_prompt(req: UserPromptRequest):
         if not system_instruction:
             return {"response": f"Error: Agent '{req.agent_id}' not found."}
 
-        # Build context-aware prompt with agent's system instruction and conversation history
-        context_prompt = build_context_prompt(system_instruction, req.conversation_history, user_prompt)
+        # Build context-aware prompt with agent's system instruction, wisdom, and conversation history
+        context_prompt = build_context_prompt(system_instruction, req.conversation_history, user_prompt, req.agent_id)
+
+        # Estimate tokens and warn if approaching limit
+        tokens_used = estimate_tokens(context_prompt)
+        if tokens_used > 1800:  # Warn at 90% of 2048 context window
+            # TODO: Implement automatic summarization here
+            print(f"Warning: Context approaching limit ({tokens_used} tokens)")
+
         response = call_model(context_prompt, max_tokens=1024)
-        return {"response": response}
+
+        # Store conversation for learning
+        conversation_db.store_conversation(req.agent_id, user_prompt, response, session_id, tokens_used)
+
+        # Update agent wisdom
+        wisdom = AgentWisdom(req.agent_id)
+        wisdom.increment_conversation_count()
+
+        # Check for pending insights
+        insights = conversation_db.get_pending_insights(req.agent_id)
+
+        return {
+            "response": response,
+            "tokens_used": tokens_used,
+            "pending_insights": [{"id": i[0], "text": i[1], "timestamp": i[2]} for i in insights]
+        }
 
     # No agent selected - check if this is an agent creation request
     # Step 1: Ask LLM to detect if this is an agent creation request
@@ -468,3 +770,54 @@ def delete_model(model_id: str):
         return {"success": True, "message": "Model deleted successfully"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+# ==================== AGENT LEARNING ENDPOINTS ====================
+
+@app.get("/agents/{agent_id}/wisdom")
+def get_agent_wisdom(agent_id: str):
+    """Get agent's accumulated wisdom and statistics"""
+    wisdom = AgentWisdom(agent_id)
+    conversations = conversation_db.get_agent_conversations(agent_id, limit=10)
+
+    return {
+        "agent_id": agent_id,
+        "conversation_count": wisdom.wisdom["conversation_count"],
+        "expertise_areas": wisdom.wisdom["expertise_areas"],
+        "recent_insights": wisdom.wisdom["insights"][-5:],
+        "recent_patterns": wisdom.wisdom["patterns"][-5:],
+        "recent_conversations_count": len(conversations),
+        "last_learning": wisdom.wisdom.get("last_learning_timestamp")
+    }
+
+@app.post("/agents/{agent_id}/insights/{insight_id}/delivered")
+def mark_insight_delivered(agent_id: str, insight_id: int):
+    """Mark an insight as delivered to user"""
+    conversation_db.mark_insight_delivered(insight_id)
+    return {"success": True}
+
+@app.get("/agents/{agent_id}/insights")
+def get_agent_insights(agent_id: str):
+    """Get pending insights for an agent"""
+    insights = conversation_db.get_pending_insights(agent_id)
+    return {
+        "insights": [
+            {"id": i[0], "text": i[1], "timestamp": i[2]}
+            for i in insights
+        ]
+    }
+
+@app.get("/agents/{agent_id}/conversations")
+def get_agent_conversation_history(agent_id: str, limit: int = 20):
+    """Get conversation history for an agent"""
+    conversations = conversation_db.get_agent_conversations(agent_id, limit)
+    return {
+        "conversations": [
+            {
+                "user_message": c[0],
+                "agent_response": c[1],
+                "timestamp": c[2],
+                "tokens_used": c[3]
+            }
+            for c in conversations
+        ]
+    }
