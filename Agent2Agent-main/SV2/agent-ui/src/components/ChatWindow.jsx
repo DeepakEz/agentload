@@ -3,11 +3,10 @@ import ChatMessage from "./ChatMessage";
 import { FaRocket, FaMicrophone } from "react-icons/fa";
 
 export default function ChatWindow({ theme }) {
-  const [messages, setMessages] = useState([
-    { text: "Hello! I'm your AI agent. Select an agent from the dropdown or chat with the default assistant.", type: "agent" }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loadingReply, setLoadingReply] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState(() => {
     // Load selected agent from localStorage
     return localStorage.getItem("selectedAgent") || null;
@@ -16,6 +15,7 @@ export default function ChatWindow({ theme }) {
   const [agentWisdom, setAgentWisdom] = useState(null);
   const [tokensUsed, setTokensUsed] = useState(0);
   const messagesEndRef = useRef(null);
+  const conversationsLoadedRef = useRef(false);
 
   // Fetch available agents on component mount
   useEffect(() => {
@@ -35,9 +35,16 @@ export default function ChatWindow({ theme }) {
 
   // Load conversation history when agent is selected
   useEffect(() => {
-    if (!selectedAgent) return;
+    if (!selectedAgent) {
+      setMessages([
+        { text: "Hello! I'm your AI agent. Select an agent from the dropdown or chat with the default assistant.", type: "agent" }
+      ]);
+      conversationsLoadedRef.current = false;
+      return;
+    }
 
     async function loadConversationHistory() {
+      setLoadingHistory(true);
       try {
         const res = await fetch(`http://localhost:8000/agents/${selectedAgent}/conversations?limit=50`);
         if (res.ok) {
@@ -50,15 +57,29 @@ export default function ChatWindow({ theme }) {
               loadedMessages.push({ text: conv.agent_response, type: "agent" });
             });
             setMessages(loadedMessages);
+            conversationsLoadedRef.current = true;
           } else {
             // No previous conversations, show welcome message
             setMessages([
               { text: `Hello! I'm ${selectedAgent}. How can I help you today?`, type: "agent" }
             ]);
+            conversationsLoadedRef.current = true;
           }
+        } else {
+          console.error("Failed to load conversations, status:", res.status);
+          setMessages([
+            { text: `Hello! I'm ${selectedAgent}. How can I help you today?`, type: "agent" }
+          ]);
+          conversationsLoadedRef.current = true;
         }
       } catch (err) {
         console.error("Failed to load conversation history:", err);
+        setMessages([
+          { text: `Hello! I'm ${selectedAgent}. I couldn't load our previous conversations, but I'm ready to chat!`, type: "agent" }
+        ]);
+        conversationsLoadedRef.current = true;
+      } finally {
+        setLoadingHistory(false);
       }
     }
 
@@ -67,9 +88,9 @@ export default function ChatWindow({ theme }) {
     localStorage.setItem("selectedAgent", selectedAgent);
   }, [selectedAgent]);
 
-  // Poll for insights when agent is selected
+  // Poll for insights when agent is selected (only after conversations loaded)
   useEffect(() => {
-    if (!selectedAgent) return;
+    if (!selectedAgent || !conversationsLoadedRef.current) return;
 
     async function checkInsights() {
       try {
@@ -107,7 +128,7 @@ export default function ChatWindow({ theme }) {
     checkInsights();
     const interval = setInterval(checkInsights, 30000); // Check every 30 seconds
     return () => clearInterval(interval);
-  }, [selectedAgent]);
+  }, [selectedAgent, conversationsLoadedRef.current]);
 
   async function sendUserMessage(userMessage, agentId, conversationHistory) {
     const payload = {
@@ -116,24 +137,42 @@ export default function ChatWindow({ theme }) {
       conversation_history: conversationHistory || null
     };
 
-    const res = await fetch("http://localhost:8000/process_message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error(res.status);
-    const data = await res.json();
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
 
-    // Update tokens used
-    if (data.tokens_used) {
-      setTokensUsed(data.tokens_used);
+    try {
+      const res = await fetch("http://localhost:8000/process_message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Server error (${res.status}): ${errorText}`);
+      }
+
+      const data = await res.json();
+
+      // Update tokens used
+      if (data.tokens_used) {
+        setTokensUsed(data.tokens_used);
+      }
+
+      return data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err;
     }
-
-    return data;
   }
 
   const handleSend = async () => {
     if (!input.trim()) return;
+    if (loadingReply) return; // Prevent double sends
 
     const userMsg = input;
     const newMessages = [...messages, { text: userMsg, type: "user" }];
@@ -144,21 +183,38 @@ export default function ChatWindow({ theme }) {
     try {
       // Pass conversation history (last 10 messages) and selected agent
       const data = await sendUserMessage(userMsg, selectedAgent, messages.slice(-10));
-      setMessages(prev => [...prev, { text: data.response, type: "agent" }]);
 
-      // Show pending insights if any
-      if (data.pending_insights && data.pending_insights.length > 0) {
-        for (const insight of data.pending_insights) {
-          setMessages(prev => [...prev, {
-            text: `💡 ${insight.text}`,
-            type: "insight",
-            insightId: insight.id
-          }]);
+      if (data && data.response) {
+        setMessages(prev => [...prev, { text: data.response, type: "agent" }]);
+
+        // Show pending insights if any
+        if (data.pending_insights && data.pending_insights.length > 0) {
+          for (const insight of data.pending_insights) {
+            setMessages(prev => [...prev, {
+              text: `💡 ${insight.text}`,
+              type: "insight",
+              insightId: insight.id
+            }]);
+          }
         }
+      } else {
+        throw new Error("Invalid response from server");
       }
     } catch (err) {
-      setMessages(prev => [...prev, { text: "Error contacting agent. Try again.", type: "agent" }]);
-      console.error(err);
+      console.error("Error sending message:", err);
+
+      let errorMsg = "❌ Error: ";
+      if (err.name === 'AbortError') {
+        errorMsg += "Request timed out. The model might be too slow or the server is busy.";
+      } else if (err.message.includes("Failed to fetch")) {
+        errorMsg += "Cannot connect to server. Make sure the backend is running on port 8000.";
+      } else if (err.message.includes("No model loaded")) {
+        errorMsg += "No model loaded. Please download and select a model from 🤖 Models menu.";
+      } else {
+        errorMsg += err.message || "Unknown error. Check browser console for details.";
+      }
+
+      setMessages(prev => [...prev, { text: errorMsg, type: "agent" }]);
     } finally {
       setLoadingReply(false);
     }
@@ -167,20 +223,7 @@ export default function ChatWindow({ theme }) {
   const handleAgentChange = (e) => {
     const agentId = e.target.value || null;
     setSelectedAgent(agentId);
-
-    // Add a system message when agent changes
-    if (agentId) {
-      const agent = availableAgents.find(a => a.id === agentId);
-      setMessages(prev => [...prev, {
-        text: `Switched to ${agent.name}. I'm now following this instruction: "${agent.system_instruction}"`,
-        type: "agent"
-      }]);
-    } else {
-      setMessages(prev => [...prev, {
-        text: "Switched to default assistant (no specific agent).",
-        type: "agent"
-      }]);
-    }
+    // Conversation history will load automatically via useEffect
   };
 
   React.useEffect(() => {
@@ -299,7 +342,12 @@ export default function ChatWindow({ theme }) {
         style={styles.messagesArea}
         className="messages-area"
       >
-        {messages.map((msg, idx) => (
+        {loadingHistory && (
+          <div style={{ textAlign: "center", padding: "20px", opacity: 0.7 }}>
+            Loading conversation history...
+          </div>
+        )}
+        {!loadingHistory && messages.map((msg, idx) => (
           <ChatMessage key={idx} text={msg.text} type={msg.type} theme={theme} />
         ))}
         <div ref={messagesEndRef} />
