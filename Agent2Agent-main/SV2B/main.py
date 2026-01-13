@@ -17,9 +17,10 @@ try:
     import chromadb
     from chromadb.config import Settings
     CHROMA_AVAILABLE = True
-except ImportError:
+except Exception as e:
     CHROMA_AVAILABLE = False
-    print("⚠️ ChromaDB not installed. Vector search disabled. Run: pip install chromadb sentence-transformers")
+    print(f"⚠️ ChromaDB not available. Vector search disabled. Error: {e}")
+    print("   Fix: pip install 'numpy<2.0' or upgrade ChromaDB to a newer version")
 
 # ------------------ INIT ------------------
 app = FastAPI(title="Local GGUF Agent API")
