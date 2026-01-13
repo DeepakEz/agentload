@@ -476,6 +476,163 @@ After receiving 3+ insights, rate each:
 
 ---
 
+### Test 19: Vector Semantic Search
+
+**Claimed:** ChromaDB integration for semantic conversation search
+
+### Test Steps:
+
+1. Have 10+ conversations about Python programming
+2. Use the vector search endpoint:
+   ```bash
+   curl "http://localhost:8000/agents/YourAgentName/vector-search?query=optimization%20advice&limit=5"
+   ```
+3. Verify results contain relevant conversations
+
+**Expected Results:**
+- ✅ Returns list of similar conversations
+- ✅ Results are semantically relevant (not just keyword matches)
+- ✅ Finds conversations about "performance" when searching for "optimization"
+- ✅ Each result shows conversation text and metadata
+
+**Alternative Test (if ChromaDB not installed):**
+- ✅ Backend logs show: "⚠️ ChromaDB not installed. Vector search disabled."
+- ✅ Endpoint returns error message gracefully
+- ✅ System continues working normally
+
+**Pass/Fail:** _____
+
+---
+
+### Test 20: Tool Registry Execution
+
+**Claimed:** Safe tool execution framework with built-in tools
+
+### Test Steps:
+
+**Test 20A - List Tools:**
+```bash
+curl http://localhost:8000/tools
+```
+
+**Expected Results:**
+- ✅ Returns list with 3 tools: calculator, text_analyzer, timestamp
+- ✅ Each tool has name and description
+
+**Test 20B - Calculator Tool:**
+```bash
+curl -X POST http://localhost:8000/tools/calculator/execute \
+  -H "Content-Type: application/json" \
+  -d '{"args": ["2 + 2 * 3"]}'
+```
+
+**Expected Results:**
+- ✅ Returns: `{"tool": "calculator", "result": "8"}`
+- ✅ Handles invalid input: `calculator('rm -rf /')` returns error
+
+**Test 20C - Text Analyzer Tool:**
+```bash
+curl -X POST http://localhost:8000/tools/text_analyzer/execute \
+  -H "Content-Type: application/json" \
+  -d '{"args": ["Hello world! This is a test."]}'
+```
+
+**Expected Results:**
+- ✅ Returns word count, character count, line count
+- ✅ Accurate counts
+
+**Pass/Fail:** _____
+
+---
+
+### Test 21: Master Architect Optimization
+
+**Claimed:** Meta-agent optimizes other agents' wisdom
+
+### Test Steps:
+
+1. Create agent and have 20+ conversations
+2. Manually add duplicate expertise to wisdom file (for testing):
+   ```bash
+   # Edit agent_wisdom/YourAgent_wisdom.json
+   # Add duplicates like: ["python", "python", "ml", "ai", "machine-learning"]
+   ```
+3. Run optimization:
+   ```bash
+   curl -X POST http://localhost:8000/agents/YourAgentName/optimize
+   ```
+4. Check wisdom file again
+
+**Expected Results:**
+- ✅ Optimization report shows before/after counts
+- ✅ Duplicates removed (["python", "python"] → ["python"])
+- ✅ Similar topics consolidated (["ml", "ai"] → ["machine-learning"])
+- ✅ Insights deduplicated
+- ✅ Patterns pruned to last 50
+
+**Verify with:**
+```bash
+curl http://localhost:8000/agents/YourAgentName/health
+```
+Should show health metrics and expertise count.
+
+**Pass/Fail:** _____
+
+---
+
+### Test 22: Wisdom Pruning Automation
+
+**Claimed:** Automatic pruning every 10 conversations prevents bloat
+
+### Test Steps:
+
+1. Create new agent
+2. Manually edit wisdom file to add 20 expertise areas
+3. Have exactly 10 conversations (count carefully)
+4. Check backend logs for pruning message
+5. Verify wisdom file now has max 15 expertise areas
+
+**Expected Results:**
+- ✅ After 10th conversation, pruning triggers automatically
+- ✅ Backend logs: "Pruning wisdom for {agent_name}"
+- ✅ Expertise areas limited to 15
+- ✅ Duplicates removed
+- ✅ Pruning happens silently (no user-facing messages)
+
+**Verification Commands:**
+```bash
+# Before: 20 expertise areas
+cat SV2B/agent_wisdom/YourAgent_wisdom.json | jq '.expertise_areas | length'
+
+# After 10 conversations: 15 or fewer
+cat SV2B/agent_wisdom/YourAgent_wisdom.json | jq '.expertise_areas | length'
+```
+
+**Pass/Fail:** _____
+
+---
+
+### Test 23: System Status Endpoint
+
+**Claimed:** Overall system status and capabilities
+
+### Test Steps:
+
+```bash
+curl http://localhost:8000/system/status
+```
+
+**Expected Results:**
+- ✅ Shows agents_count
+- ✅ Shows tools_count: 3
+- ✅ Shows vector_search_enabled: true or false
+- ✅ Shows background_learner_active: true
+- ✅ Lists tools_available: ["calculator", "text_analyzer", "timestamp"]
+
+**Pass/Fail:** _____
+
+---
+
 ## 📊 Overall Test Results Summary
 
 | Category | Tests Passed | Total Tests | Pass Rate |
@@ -483,18 +640,20 @@ After receiving 3+ insights, rate each:
 | Core Features | ___/5 | 5 | ___% |
 | Learning System | ___/6 | 6 | ___% |
 | Stability | ___/3 | 3 | ___% |
-| Advanced | ___/4 | 4 | ___% |
-| **TOTAL** | **___/18** | **18** | **___% **|
+| Advanced Features | ___/4 | 4 | ___% |
+| New Enhancements | ___/5 | 5 | ___% |
+| **TOTAL** | **___/23** | **23** | **___% **|
 
 ---
 
 ## ✅ Minimum Passing Criteria
 
 For the system to be considered "working as claimed":
-- **85%+ overall pass rate** (15/18 tests)
+- **85%+ overall pass rate** (20/23 tests)
 - **100% on Tests 1-4** (core functionality)
 - **At least 1 genuine AI-generated insight** (Test 5)
 - **No crashes or data loss** (Test 15)
+- **At least 3/5 new enhancement tests passing** (Tests 19-23)
 
 ---
 
