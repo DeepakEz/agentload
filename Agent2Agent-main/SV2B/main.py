@@ -15,7 +15,6 @@ import time
 import hashlib
 try:
     import chromadb
-    from chromadb.config import Settings
     CHROMA_AVAILABLE = True
 except Exception as e:
     CHROMA_AVAILABLE = False
@@ -352,10 +351,8 @@ class VectorWisdom:
 
         if self.enabled:
             try:
-                self.client = chromadb.Client(Settings(
-                    chroma_db_impl="duckdb+parquet",
-                    persist_directory=str(Path("./chroma_db"))
-                ))
+                # Use new ChromaDB PersistentClient API (not deprecated)
+                self.client = chromadb.PersistentClient(path="./chroma_db")
                 self.collection = self.client.get_or_create_collection(
                     name=f"agent_{agent_id}",
                     metadata={"description": f"Conversations for {agent_id}"}
