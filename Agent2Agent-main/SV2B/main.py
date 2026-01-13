@@ -7,12 +7,19 @@ import re
 import urllib.request
 from pathlib import Path
 from llama_cpp import Llama
-from typing import Dict, List
+from typing import Dict, List, Callable, Any
 import threading
 import sqlite3
 from datetime import datetime
 import time
 import hashlib
+try:
+    import chromadb
+    from chromadb.config import Settings
+    CHROMA_AVAILABLE = True
+except ImportError:
+    CHROMA_AVAILABLE = False
+    print("⚠️ ChromaDB not installed. Vector search disabled. Run: pip install chromadb sentence-transformers")
 
 # ------------------ INIT ------------------
 app = FastAPI(title="Local GGUF Agent API")
@@ -320,6 +327,298 @@ class AgentWisdom:
 
         return "\n".join(summary_parts)
 
+    def prune_if_needed(self):
+        """Prune wisdom to prevent bloat"""
+        # Limit expertise areas to top 15 most relevant
+        if len(self.wisdom["expertise_areas"]) > 15:
+            self.wisdom["expertise_areas"] = self.wisdom["expertise_areas"][-15:]
+
+        # Remove duplicate expertise areas
+        self.wisdom["expertise_areas"] = list(set(self.wisdom["expertise_areas"]))
+
+        # Patterns already limited in add_pattern (50 max)
+        # Insights already limited in add_insight (20 max)
+
+        self.save_wisdom()
+
+# ==================== VECTOR WISDOM - Enhancement #1 ====================
+
+class VectorWisdom:
+    """Vector-based semantic search for conversations using ChromaDB"""
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+        self.enabled = CHROMA_AVAILABLE
+
+        if self.enabled:
+            try:
+                self.client = chromadb.Client(Settings(
+                    chroma_db_impl="duckdb+parquet",
+                    persist_directory=str(Path("./chroma_db"))
+                ))
+                self.collection = self.client.get_or_create_collection(
+                    name=f"agent_{agent_id}",
+                    metadata={"description": f"Conversations for {agent_id}"}
+                )
+            except Exception as e:
+                print(f"ChromaDB initialization failed: {e}")
+                self.enabled = False
+
+    def add_conversation(self, user_msg: str, agent_resp: str, metadata: dict = None):
+        """Store conversation with vector embeddings"""
+        if not self.enabled:
+            return
+
+        try:
+            conv_text = f"User: {user_msg}\nAgent: {agent_resp}"
+            doc_id = f"conv_{int(time.time())}_{hash(conv_text) % 10000}"
+
+            self.collection.add(
+                documents=[conv_text],
+                metadatas=[metadata or {}],
+                ids=[doc_id]
+            )
+        except Exception as e:
+            print(f"Vector storage error: {e}")
+
+    def semantic_search(self, query: str, n_results: int = 5) -> List[dict]:
+        """Find similar past conversations"""
+        if not self.enabled:
+            return []
+
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=n_results
+            )
+
+            if results and results['documents']:
+                return [
+                    {"text": doc, "metadata": meta}
+                    for doc, meta in zip(results['documents'][0], results['metadatas'][0])
+                ]
+            return []
+        except Exception as e:
+            print(f"Vector search error: {e}")
+            return []
+
+    def get_conversation_count(self) -> int:
+        """Get total conversations stored"""
+        if not self.enabled:
+            return 0
+        try:
+            return self.collection.count()
+        except:
+            return 0
+
+# ==================== TOOL REGISTRY - Enhancement #2 ====================
+
+class Tool:
+    """Base class for agent tools"""
+    def __init__(self, name: str, description: str, func: Callable):
+        self.name = name
+        self.description = description
+        self.func = func
+
+    def execute(self, *args, **kwargs) -> Any:
+        """Execute the tool"""
+        try:
+            return self.func(*args, **kwargs)
+        except Exception as e:
+            return f"Tool execution error: {str(e)}"
+
+class ToolRegistry:
+    """Safe tool registry for agent capabilities"""
+    def __init__(self):
+        self.tools: Dict[str, Tool] = {}
+        self._register_default_tools()
+
+    def _register_default_tools(self):
+        """Register safe, predefined tools"""
+
+        # Tool 1: Calculator (safe math evaluation)
+        def safe_calculate(expression: str) -> str:
+            """Safely evaluate mathematical expressions"""
+            try:
+                # Only allow numbers, operators, parentheses
+                allowed_chars = set('0123456789+-*/().% ')
+                if not all(c in allowed_chars for c in expression):
+                    return "Error: Invalid characters in expression"
+
+                result = eval(expression, {"__builtins__": {}}, {})
+                return str(result)
+            except Exception as e:
+                return f"Calculation error: {str(e)}"
+
+        self.register_tool(Tool(
+            name="calculator",
+            description="Perform safe mathematical calculations. Usage: calculator('2 + 2')",
+            func=safe_calculate
+        ))
+
+        # Tool 2: Text analyzer
+        def analyze_text(text: str) -> dict:
+            """Analyze text for word count, character count, etc."""
+            return {
+                "word_count": len(text.split()),
+                "char_count": len(text),
+                "line_count": len(text.split('\n')),
+                "unique_words": len(set(text.lower().split()))
+            }
+
+        self.register_tool(Tool(
+            name="text_analyzer",
+            description="Analyze text statistics. Usage: text_analyzer('your text here')",
+            func=analyze_text
+        ))
+
+        # Tool 3: Timestamp generator
+        def get_timestamp(format: str = "iso") -> str:
+            """Get current timestamp"""
+            now = datetime.now()
+            if format == "iso":
+                return now.isoformat()
+            elif format == "unix":
+                return str(int(now.timestamp()))
+            else:
+                return now.strftime("%Y-%m-%d %H:%M:%S")
+
+        self.register_tool(Tool(
+            name="timestamp",
+            description="Get current timestamp. Usage: timestamp() or timestamp('unix')",
+            func=get_timestamp
+        ))
+
+    def register_tool(self, tool: Tool):
+        """Register a new tool"""
+        self.tools[tool.name] = tool
+        print(f"🔧 Tool registered: {tool.name}")
+
+    def get_tool(self, name: str) -> Tool | None:
+        """Get a tool by name"""
+        return self.tools.get(name)
+
+    def list_tools(self) -> List[str]:
+        """List all available tools"""
+        return [f"{name}: {tool.description}" for name, tool in self.tools.items()]
+
+    def execute_tool(self, name: str, *args, **kwargs) -> Any:
+        """Execute a tool by name"""
+        tool = self.get_tool(name)
+        if not tool:
+            return f"Error: Tool '{name}' not found"
+        return tool.execute(*args, **kwargs)
+
+# ==================== MASTER ARCHITECT - Enhancement #3 ====================
+
+class MasterArchitect:
+    """Meta-agent that optimizes other agents' wisdom"""
+    def __init__(self):
+        self.db = ConversationDatabase()
+
+    def optimize_agent(self, agent_id: str) -> dict:
+        """Run optimization on an agent's wisdom"""
+        wisdom = AgentWisdom(agent_id)
+
+        optimizations = {
+            "before": {
+                "insights_count": len(wisdom.wisdom["insights"]),
+                "patterns_count": len(wisdom.wisdom["patterns"]),
+                "expertise_count": len(wisdom.wisdom["expertise_areas"])
+            }
+        }
+
+        # 1. Deduplicate insights
+        unique_insights = self._deduplicate_insights(wisdom.wisdom["insights"])
+        wisdom.wisdom["insights"] = unique_insights
+
+        # 2. Consolidate similar expertise areas
+        consolidated_expertise = self._consolidate_expertise(wisdom.wisdom["expertise_areas"])
+        wisdom.wisdom["expertise_areas"] = consolidated_expertise
+
+        # 3. Remove low-quality patterns (if any scoring exists)
+        pruned_patterns = wisdom.wisdom["patterns"][-50:]  # Keep top 50
+        wisdom.wisdom["patterns"] = pruned_patterns
+
+        wisdom.save_wisdom()
+
+        optimizations["after"] = {
+            "insights_count": len(wisdom.wisdom["insights"]),
+            "patterns_count": len(wisdom.wisdom["patterns"]),
+            "expertise_count": len(wisdom.wisdom["expertise_areas"])
+        }
+
+        optimizations["savings"] = {
+            "insights_removed": optimizations["before"]["insights_count"] - optimizations["after"]["insights_count"],
+            "expertise_merged": optimizations["before"]["expertise_count"] - optimizations["after"]["expertise_count"]
+        }
+
+        return optimizations
+
+    def _deduplicate_insights(self, insights: List[dict]) -> List[dict]:
+        """Remove duplicate or very similar insights"""
+        seen_texts = set()
+        unique = []
+
+        for insight in insights:
+            text = insight.get("text", "").lower().strip()
+            # Simple deduplication - could use embeddings for better results
+            if text and text not in seen_texts:
+                seen_texts.add(text)
+                unique.append(insight)
+
+        return unique
+
+    def _consolidate_expertise(self, areas: List[str]) -> List[str]:
+        """Merge similar expertise areas"""
+        # Simple consolidation - group similar terms
+        consolidated = set()
+
+        # Mapping of similar terms
+        synonyms = {
+            "ml": "machine-learning",
+            "ai": "machine-learning",
+            "neural-networks": "machine-learning",
+            "deep-learning": "machine-learning",
+            "python": "programming",
+            "javascript": "programming",
+            "coding": "programming",
+        }
+
+        for area in areas:
+            area_lower = area.lower()
+            # Check if it should be consolidated
+            consolidated.add(synonyms.get(area_lower, area))
+
+        return list(consolidated)
+
+    def optimize_all_agents(self) -> dict:
+        """Optimize all agents"""
+        agents = load_agents()
+        results = {}
+
+        for agent_id in agents.keys():
+            try:
+                results[agent_id] = self.optimize_agent(agent_id)
+            except Exception as e:
+                results[agent_id] = {"error": str(e)}
+
+        return results
+
+    def health_check(self, agent_id: str) -> dict:
+        """Check agent health metrics"""
+        wisdom = AgentWisdom(agent_id)
+        conversations = self.db.get_agent_conversations(agent_id, limit=100)
+
+        return {
+            "agent_id": agent_id,
+            "total_conversations": wisdom.wisdom["conversation_count"],
+            "insights_count": len(wisdom.wisdom["insights"]),
+            "patterns_count": len(wisdom.wisdom["patterns"]),
+            "expertise_areas": len(wisdom.wisdom["expertise_areas"]),
+            "recent_conversations": len(conversations),
+            "health_status": "healthy" if len(conversations) > 0 else "inactive"
+        }
+
 class BackgroundLearner:
     """AI-powered continuous learning in background"""
     def __init__(self):
@@ -455,11 +754,18 @@ Output ONLY the insight text (no JSON, just the message):"""
 # Initialize systems
 conversation_db = ConversationDatabase()
 background_learner = BackgroundLearner()
+tool_registry = ToolRegistry()
+master_architect = MasterArchitect()
 
 # Start background learning on startup
 @app.on_event("startup")
 async def startup_event():
     background_learner.start()
+    print("🚀 All systems initialized:")
+    print(f"   - Background Learner: Active")
+    print(f"   - Tool Registry: {len(tool_registry.tools)} tools loaded")
+    print(f"   - Master Architect: Ready")
+    print(f"   - Vector Search: {'Enabled' if CHROMA_AVAILABLE else 'Disabled (install chromadb)'}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -647,9 +953,25 @@ def process_prompt(req: UserPromptRequest):
         # Store conversation for learning
         conversation_db.store_conversation(req.agent_id, user_prompt, response, session_id, tokens_used)
 
+        # Store in vector database for semantic search (if available)
+        if CHROMA_AVAILABLE:
+            try:
+                vector_wisdom = VectorWisdom(req.agent_id)
+                vector_wisdom.add_conversation(user_prompt, response, {
+                    "session_id": session_id,
+                    "tokens": tokens_used,
+                    "timestamp": datetime.now().isoformat()
+                })
+            except Exception as e:
+                print(f"Vector storage failed: {e}")
+
         # Update agent wisdom
         wisdom = AgentWisdom(req.agent_id)
         wisdom.increment_conversation_count()
+
+        # Prune wisdom periodically (every 10 conversations)
+        if wisdom.wisdom["conversation_count"] % 10 == 0:
+            wisdom.prune_if_needed()
 
         # Check for pending insights
         insights = conversation_db.get_pending_insights(req.agent_id)
@@ -926,3 +1248,63 @@ def get_agent_conversation_history(agent_id: str, limit: int = 20):
             for c in conversations
         ]
     }
+
+# ==================== NEW ENHANCEMENT ENDPOINTS ====================
+
+@app.get("/tools")
+def list_tools():
+    """List all available tools"""
+    return {"tools": tool_registry.list_tools()}
+
+@app.post("/tools/{tool_name}/execute")
+def execute_tool_endpoint(tool_name: str, request: dict):
+    """Execute a tool by name"""
+    args = request.get("args", [])
+    kwargs = request.get("kwargs", {})
+    result = tool_registry.execute_tool(tool_name, *args, **kwargs)
+    return {"tool": tool_name, "result": result}
+
+@app.get("/agents/{agent_id}/vector-search")
+def vector_search_conversations(agent_id: str, query: str, limit: int = 5):
+    """Semantic search through agent conversations"""
+    if not CHROMA_AVAILABLE:
+        return {"error": "Vector search not available. Install chromadb."}
+
+    vector_wisdom = VectorWisdom(agent_id)
+    results = vector_wisdom.semantic_search(query, n_results=limit)
+    return {
+        "query": query,
+        "results": results,
+        "count": len(results)
+    }
+
+@app.post("/agents/{agent_id}/optimize")
+def optimize_agent_wisdom(agent_id: str):
+    """Run Master Architect optimization on agent"""
+    result = master_architect.optimize_agent(agent_id)
+    return result
+
+@app.post("/agents/optimize-all")
+def optimize_all_agents():
+    """Optimize all agents"""
+    results = master_architect.optimize_all_agents()
+    return {"optimized_agents": results}
+
+@app.get("/agents/{agent_id}/health")
+def check_agent_health(agent_id: str):
+    """Check agent health metrics"""
+    health = master_architect.health_check(agent_id)
+    return health
+
+@app.get("/system/status")
+def system_status():
+    """Get overall system status"""
+    agents = load_agents()
+    return {
+        "agents_count": len(agents),
+        "tools_count": len(tool_registry.tools),
+        "vector_search_enabled": CHROMA_AVAILABLE,
+        "background_learner_active": background_learner.running,
+        "tools_available": list(tool_registry.tools.keys())
+    }
+

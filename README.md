@@ -40,6 +40,30 @@ A revolutionary local AI agent platform that learns from every conversation, thi
 - Extracts patterns for conversation continuity
 - Smart context summarization
 
+### 7. **Vector Database Semantic Search**
+- ChromaDB integration for semantic conversation search
+- Find similar past conversations by meaning, not keywords
+- Automatic embedding generation for all conversations
+- Query past interactions with natural language
+
+### 8. **Tool Registry & Capabilities**
+- Safe, sandboxed tool execution framework
+- Extensible tool system for agent capabilities
+- Built-in tools: calculator, text analyzer, timestamp
+- Foundation for dynamic tool creation
+
+### 9. **Wisdom Pruning System**
+- Automatic memory optimization prevents bloat
+- Consolidates expertise areas intelligently
+- Removes duplicates and low-quality patterns
+- Runs automatically every 10 conversations
+
+### 10. **Master Architect Meta-Agent**
+- Meta-agent that optimizes other agents
+- Deduplicates insights across all agents
+- Consolidates similar expertise areas
+- Health monitoring for agent performance
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -60,6 +84,8 @@ cd agentload/Agent2Agent-main
 cd SV2B
 pip install -r requirements.txt
 ```
+
+**Note:** ChromaDB and sentence-transformers are included for vector search. If you encounter installation issues, the system will work without them (vector search will be disabled).
 
 **3. Install frontend dependencies:**
 ```bash
@@ -141,7 +167,8 @@ SV2B/
 ├── agents.json              # Agent definitions
 ├── models/                  # Downloaded GGUF models
 ├── agent_wisdom/            # Per-agent learning data (JSON)
-└── agent_conversations.db   # SQLite conversation database
+├── agent_conversations.db   # SQLite conversation database
+└── chroma_db/               # Vector embeddings storage (optional)
 ```
 
 ### Frontend (React + Vite)
@@ -158,10 +185,10 @@ SV2/agent-ui/
 ```
 
 ### Key Technologies
-- **Backend**: FastAPI, llama-cpp-python, SQLite
+- **Backend**: FastAPI, llama-cpp-python, SQLite, ChromaDB
 - **Frontend**: React 19, Vite
-- **AI**: Direct GGUF model inference
-- **Storage**: SQLite (conversations) + JSON (wisdom)
+- **AI**: Direct GGUF model inference, sentence-transformers
+- **Storage**: SQLite (conversations) + JSON (wisdom) + ChromaDB (vectors)
 
 ## 📡 API Endpoints
 
@@ -172,6 +199,17 @@ SV2/agent-ui/
 - `GET /agents/{agent_id}/wisdom` - Get agent learning stats
 - `GET /agents/{agent_id}/conversations` - Get conversation history
 - `GET /agents/{agent_id}/insights` - Get pending proactive insights
+- `GET /agents/{agent_id}/vector-search` - Semantic search through conversations
+- `POST /agents/{agent_id}/optimize` - Run Master Architect optimization
+- `POST /agents/optimize-all` - Optimize all agents
+- `GET /agents/{agent_id}/health` - Get agent health metrics
+
+### Tool Management
+- `GET /tools` - List all available tools
+- `POST /tools/{tool_name}/execute` - Execute a specific tool
+
+### System
+- `GET /system/status` - Overall system status and capabilities
 
 ### Model Management
 - `GET /models` - List available models
@@ -243,6 +281,73 @@ SV2/agent-ui/
 
 ### Adding Custom Models
 Use the "Add Custom Model" button in the Models UI to add any GGUF model URL.
+
+## 🚀 Advanced Features
+
+### Vector Semantic Search
+
+Search past conversations by meaning, not just keywords:
+
+```python
+# API Usage
+GET /agents/{agent_id}/vector-search?query=machine%20learning%20advice&limit=5
+```
+
+**Example:** Instead of searching for exact words, ask "what did we discuss about optimization?" and it will find related conversations about performance, speed, efficiency, etc.
+
+**Note:** Requires ChromaDB installation. See installation section below.
+
+### Tool Execution
+
+Agents can use tools for enhanced capabilities:
+
+**Available Tools:**
+- `calculator` - Safe mathematical calculations
+- `text_analyzer` - Word/character/line counts
+- `timestamp` - Current time in various formats
+
+```python
+# List tools
+GET /tools
+
+# Execute tool
+POST /tools/calculator/execute
+{
+  "args": ["2 + 2 * 3"]
+}
+```
+
+### Master Architect Optimization
+
+Run meta-agent optimization to improve agent performance:
+
+```python
+# Optimize single agent
+POST /agents/{agent_id}/optimize
+
+# Optimize all agents
+POST /agents/optimize-all
+
+# Check agent health
+GET /agents/{agent_id}/health
+```
+
+**What it does:**
+- Deduplicates insights (removes redundant learnings)
+- Consolidates expertise areas (merges "ml", "ai", "neural-networks" → "machine-learning")
+- Removes low-quality patterns
+- Reports optimization statistics
+
+**When to use:** Run monthly or when agents accumulate 100+ conversations.
+
+### Wisdom Pruning
+
+Automatic memory optimization runs every 10 conversations:
+- Limits expertise areas to 15 most relevant
+- Removes duplicates
+- Prevents unbounded memory growth
+
+No configuration needed - works automatically.
 
 ## 🔧 Configuration
 
