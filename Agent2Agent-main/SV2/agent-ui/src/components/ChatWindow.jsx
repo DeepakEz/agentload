@@ -2,15 +2,11 @@ import React, { useState, useRef, useEffect } from "react";
 import ChatMessage from "./ChatMessage";
 import { FaRocket, FaMicrophone } from "react-icons/fa";
 
-export default function ChatWindow({ theme }) {
+export default function ChatWindow({ theme, selectedAgent }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loadingReply, setLoadingReply] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState(() => {
-    // Load selected agent from localStorage
-    return localStorage.getItem("selectedAgent") || null;
-  });
   const [availableAgents, setAvailableAgents] = useState([]);
   const [agentWisdom, setAgentWisdom] = useState(null);
   const [tokensUsed, setTokensUsed] = useState(0);
@@ -84,8 +80,6 @@ export default function ChatWindow({ theme }) {
     }
 
     loadConversationHistory();
-    // Save selected agent to localStorage
-    localStorage.setItem("selectedAgent", selectedAgent);
   }, [selectedAgent]);
 
   // Poll for insights when agent is selected (only after conversations loaded)
