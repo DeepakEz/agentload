@@ -49,15 +49,40 @@ const themes = {
 
 
 function App() {
-  const [themeName, setThemeName] = useState("dark"); // <-- fixed
+  const [themeName, setThemeName] = useState("dark");
+  const [selectedAgent, setSelectedAgent] = useState(() => {
+    // Load selected agent from localStorage
+    return localStorage.getItem("selectedAgent") || null;
+  });
+
   const toggleTheme = () => setThemeName(prev => (prev === "dark" ? "light" : "dark"));
+
+  const handleAgentSelect = (agentName) => {
+    setSelectedAgent(agentName);
+    localStorage.setItem("selectedAgent", agentName);
+  };
+
+  const handleNewChat = () => {
+    setSelectedAgent(null);
+    localStorage.removeItem("selectedAgent");
+    // Force ChatWindow to reload by clearing agent
+  };
 
   const theme = themes[themeName];
 
   return (
     <div style={styles.app}>
-      <Sidebar theme={theme} toggleTheme={toggleTheme} />
-      <ChatWindow theme={theme} />
+      <Sidebar
+        theme={theme}
+        toggleTheme={toggleTheme}
+        selectedAgent={selectedAgent}
+        onAgentSelect={handleAgentSelect}
+        onNewChat={handleNewChat}
+      />
+      <ChatWindow
+        theme={theme}
+        selectedAgent={selectedAgent}
+      />
     </div>
   );
 }

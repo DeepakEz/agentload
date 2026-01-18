@@ -148,11 +148,12 @@ const styles = {
   version: { fontSize: "12px" }
 };
 
-export default function Sidebar({ theme, toggleTheme }) {
+export default function Sidebar({ theme, toggleTheme, selectedAgent, onAgentSelect, onNewChat }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showModelManager, setShowModelManager] = useState(false);
   const [showAgentCreator, setShowAgentCreator] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const previousChats = ["Chat with AI 1", "Chat with AI 2", "Chat with AI 3"];
 const [agents, setAgents] = useState([]);
@@ -183,6 +184,7 @@ useEffect(() => {
             <div style={styles.title}>AGENT BUILDER</div>
             <button
               style={styles.newChatButton(theme)}
+              onClick={onNewChat}
               onMouseEnter={e => (e.currentTarget.style.backgroundColor = theme.buttonHover)}
               onMouseLeave={e => (e.currentTarget.style.backgroundColor = theme.buttonBg)}
             >
@@ -244,9 +246,14 @@ useEffect(() => {
     {agents.map((agent, idx) => (
       <div
         key={idx}
-        style={styles.agentsItem(theme)}
+        style={{
+          ...styles.agentsItem(theme),
+          backgroundColor: selectedAgent === agent.name ? theme.buttonHover : theme.chatItemBg,
+          fontWeight: selectedAgent === agent.name ? "bold" : "normal"
+        }}
+        onClick={() => onAgentSelect(agent.name)}
         onMouseEnter={e => (e.currentTarget.style.backgroundColor = theme.chatItemHover)}
-        onMouseLeave={e => (e.currentTarget.style.backgroundColor = theme.chatItemBg)}
+        onMouseLeave={e => (e.currentTarget.style.backgroundColor = selectedAgent === agent.name ? theme.buttonHover : theme.chatItemBg)}
       >
         {agent.name}
       </div>
@@ -265,6 +272,7 @@ useEffect(() => {
 
             <button
               style={styles.bottomButton(theme)}
+              onClick={() => setShowSettings(true)}
               onMouseEnter={e => (e.currentTarget.style.backgroundColor = theme.bottomButtonHover)}
               onMouseLeave={e => (e.currentTarget.style.backgroundColor = theme.bottomButtonBg)}
             >
@@ -299,6 +307,14 @@ useEffect(() => {
             setShowAgentCreator(false);
             loadAgents(); // Reload agents after creating
           }}
+        />
+      )}
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <SettingsModal
+          theme={theme === themes.dark ? themes.dark : themes.light}
+          onClose={() => setShowSettings(false)}
         />
       )}
     </div>
@@ -588,6 +604,120 @@ function AgentCreator({ theme, onClose }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// SettingsModal Component
+function SettingsModal({ theme, onClose }) {
+  const [systemStatus, setSystemStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("http://localhost:8000/system/status")
+      .then(res => res.json())
+      .then(data => {
+        setSystemStatus(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error("Failed to load system status:", err);
+        setLoading(false);
+      });
+  }, []);
+
+  return (
+    <div style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0,0,0,0.7)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 1000
+    }}>
+      <div style={{
+        backgroundColor: theme.sidebarBg,
+        color: theme.text,
+        padding: "30px",
+        borderRadius: "10px",
+        width: "500px",
+        maxWidth: "90%",
+        maxHeight: "80vh",
+        overflowY: "auto"
+      }}>
+        <h2 style={{ marginTop: 0 }}>Settings</h2>
+
+        <div style={{ marginBottom: "20px" }}>
+          <h3 style={{ fontSize: "16px", marginBottom: "10px" }}>System Status</h3>
+          {loading ? (
+            <p>Loading...</p>
+          ) : systemStatus ? (
+            <div style={{
+              backgroundColor: theme.chatItemBg,
+              padding: "15px",
+              borderRadius: "5px",
+              fontSize: "14px"
+            }}>
+              <p><strong>Agents:</strong> {systemStatus.agents_count}</p>
+              <p><strong>Tools:</strong> {systemStatus.tools_count}</p>
+              <p><strong>Vector Search:</strong> {systemStatus.vector_search_enabled ? "✅ Enabled" : "❌ Disabled"}</p>
+              <p><strong>Background Learner:</strong> {systemStatus.background_learner_active ? "✅ Active" : "❌ Inactive"}</p>
+              {systemStatus.tools_available && (
+                <p><strong>Available Tools:</strong> {systemStatus.tools_available.join(", ")}</p>
+              )}
+            </div>
+          ) : (
+            <p style={{ color: "#ff4444" }}>Failed to load system status</p>
+          )}
+        </div>
+
+        <div style={{ marginBottom: "20px" }}>
+          <h3 style={{ fontSize: "16px", marginBottom: "10px" }}>API Endpoints</h3>
+          <div style={{
+            backgroundColor: theme.chatItemBg,
+            padding: "15px",
+            borderRadius: "5px",
+            fontSize: "13px",
+            fontFamily: "monospace"
+          }}>
+            <p><strong>Backend:</strong> http://localhost:8000</p>
+            <p><strong>Docs:</strong> http://localhost:8000/docs</p>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: "20px" }}>
+          <h3 style={{ fontSize: "16px", marginBottom: "10px" }}>About</h3>
+          <div style={{
+            backgroundColor: theme.chatItemBg,
+            padding: "15px",
+            borderRadius: "5px",
+            fontSize: "14px"
+          }}>
+            <p><strong>Version:</strong> 1.0</p>
+            <p><strong>Features:</strong> Self-learning agents, Vector search, Background thinking, Tool execution</p>
+          </div>
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{
+            width: "100%",
+            padding: "12px",
+            backgroundColor: theme.buttonBg,
+            color: theme.text,
+            border: "none",
+            borderRadius: "5px",
+            cursor: "pointer",
+            fontWeight: "bold"
+          }}
+        >
+          Close
+        </button>
       </div>
     </div>
   );
